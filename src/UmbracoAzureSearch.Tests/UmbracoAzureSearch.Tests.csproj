@@ -36,4 +36,85 @@
       </None>
     </ItemGroup>
 
+    <ItemGroup>
+      <Compile Update="Search\ElasticsearchSearcherTests.DateTimeOffsets.cs">
+        <DependentUpon>ElasticsearchSearcherTests.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Search\ElasticsearchSearcherTests.Decimals.cs">
+        <DependentUpon>ElasticsearchSearcherTests.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Search\ElasticsearchSearcherTests.Integers.cs">
+        <DependentUpon>ElasticsearchSearcherTests.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Search\ElasticsearchSearcherTests.Keywords.cs">
+        <DependentUpon>ElasticsearchSearcherTests.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Search\ElasticsearchSearcherTests.Query.cs">
+        <DependentUpon>ElasticsearchSearcherTests.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Search\ElasticsearchSearcherTests.Texts.cs">
+        <DependentUpon>ElasticsearchSearcherTests.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Search\ElasticsearchSearcherTests.TextsR1.cs">
+        <DependentUpon>ElasticsearchSearcherTests.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Search\ElasticsearchSearcherTests.TextsR2.cs">
+        <DependentUpon>ElasticsearchSearcherTests.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Search\ElasticsearchSearcherTests.TextsR3.cs">
+        <DependentUpon>ElasticsearchSearcherTests.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Search\ElasticsearchSearcherTests.VariousCases.cs">
+        <DependentUpon>ElasticsearchSearcherTests.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Search\ElasticsearchSearcherVarianceTests.CultureVariance.cs">
+        <DependentUpon>ElasticsearchSearcherVarianceTests.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Search\ElasticsearchSearcherVarianceTests.Invariance.cs">
+        <DependentUpon>ElasticsearchSearcherVarianceTests.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Search\ElasticsearchSearcherVarianceTests.MixedVariance.cs">
+        <DependentUpon>ElasticsearchSearcherVarianceTests.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Search\AzureSearchSearcherTests.DateTimeOffsets.cs">
+        <DependentUpon>AzureSearchSearcherTests.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Search\AzureSearchSearcherTests.Decimals.cs">
+        <DependentUpon>AzureSearchSearcherTests.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Search\AzureSearchSearcherTests.Integers.cs">
+        <DependentUpon>AzureSearchSearcherTests.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Search\AzureSearchSearcherTests.Keywords.cs">
+        <DependentUpon>AzureSearchSearcherTests.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Search\AzureSearchSearcherTests.Query.cs">
+        <DependentUpon>AzureSearchSearcherTests.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Search\AzureSearchSearcherTests.Texts.cs">
+        <DependentUpon>AzureSearchSearcherTests.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Search\AzureSearchSearcherTests.TextsR1.cs">
+        <DependentUpon>AzureSearchSearcherTests.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Search\AzureSearchSearcherTests.TextsR2.cs">
+        <DependentUpon>AzureSearchSearcherTests.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Search\AzureSearchSearcherTests.TextsR3.cs">
+        <DependentUpon>AzureSearchSearcherTests.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Search\AzureSearchSearcherTests.VariousCases.cs">
+        <DependentUpon>AzureSearchSearcherTests.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Search\AzureSearchSearcherVarianceTests.CultureVariance.cs">
+        <DependentUpon>AzureSearchSearcherVarianceTests.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Search\AzureSearchSearcherVarianceTests.Invariance.cs">
+        <DependentUpon>AzureSearchSearcherVarianceTests.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Search\AzureSearchSearcherVarianceTests.MixedVariance.cs">
+        <DependentUpon>AzureSearchSearcherVarianceTests.cs</DependentUpon>
+      </Compile>
+    </ItemGroup>
+
 </Project>

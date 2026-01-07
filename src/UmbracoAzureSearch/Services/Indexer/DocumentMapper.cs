@@ -2,6 +2,7 @@ using Azure.Search.Documents;
 using Azure.Search.Documents.Indexes.Models;
 using Azure.Search.Documents.Models;
 using Umbraco.Cms.Core.Models;
+using Umbraco.Cms.Search.Core.Extensions;
 using Umbraco.Cms.Search.Core.Models.Indexing;
 using Umbraco.Extensions;
 using UmbracoAzureSearch.Constants;
@@ -134,12 +135,12 @@ public class DocumentMapper
 
         var document = new SearchDocument()
         {
-            [IndexConstants.FieldNames.Id] = $"{id:D}_{culture}_{segment}",
+            [IndexConstants.FieldNames.Id] = $"{id.AsKeyword()}_{culture}_{segment}",
             [IndexConstants.FieldNames.ObjectType] = objectType.ToString(),
-            [IndexConstants.FieldNames.Key] = id,
+            [IndexConstants.FieldNames.Key] = id.AsKeyword(),
             [IndexConstants.FieldNames.Culture] = culture,
             [IndexConstants.FieldNames.Segment] = segment,
-            [IndexConstants.FieldNames.AccessKeys] = accessKeys,
+            [IndexConstants.FieldNames.AccessKeys] = accessKeys.Select(g => g.AsKeyword()).ToArray(),
             [IndexConstants.FieldNames.AllTexts] = allTexts,
             [IndexConstants.FieldNames.AllTextsR1] = allTextsR1,
             [IndexConstants.FieldNames.AllTextsR2] = allTextsR2,
@@ -148,7 +149,9 @@ public class DocumentMapper
 
         foreach (var mapping in fieldMappings)
         {
-            document[mapping.FieldName] = mapping.Values;
+            document[mapping.FieldName] = mapping.IsCollection                                                                                                                                                                                
+                         ? mapping.Values                                                                                                                                                                                                              
+                         : mapping.Values.FirstOrDefault(); 
         }
 
         return (document, fieldMappings);
