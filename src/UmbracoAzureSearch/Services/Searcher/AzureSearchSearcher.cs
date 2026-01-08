@@ -1,3 +1,4 @@
+using System.Globalization;
 using Azure.Search.Documents;
 using Azure.Search.Documents.Models;
 using Umbraco.Cms.Core.Models;
@@ -12,7 +13,9 @@ using UmbracoAzureSearch.Services.Factory;
 
 namespace UmbracoAzureSearch.Services.Searcher;
 
-public class AzureSearchSearcher(IServerRoleAccessor serverRoleAccessor, IAzureSearchClientFactory azureSearchClientFactory)
+public class AzureSearchSearcher(
+    IServerRoleAccessor serverRoleAccessor,
+    IAzureSearchClientFactory azureSearchClientFactory)
     : UmbracoAzureServiceBase(serverRoleAccessor), IAzureSearchSearcher
 {
     public async Task<SearchResult> SearchAsync(
@@ -46,7 +49,8 @@ public class AzureSearchSearcher(IServerRoleAccessor serverRoleAccessor, IAzureS
         if (!string.IsNullOrWhiteSpace(culture))
         {
             var cultureValue = culture.IndexCulture();
-            filterClauses.Add($"({IndexConstants.FieldNames.Culture} eq '{cultureValue}' or {IndexConstants.FieldNames.Culture} eq '{IndexConstants.Variation.InvariantCulture}')");
+            filterClauses.Add(
+                $"({IndexConstants.FieldNames.Culture} eq '{cultureValue}' or {IndexConstants.FieldNames.Culture} eq '{IndexConstants.Variation.InvariantCulture}')");
         }
         else
         {
@@ -57,7 +61,8 @@ public class AzureSearchSearcher(IServerRoleAccessor serverRoleAccessor, IAzureS
         if (!string.IsNullOrWhiteSpace(segment))
         {
             var segmentValue = segment.IndexSegment();
-            filterClauses.Add($"({IndexConstants.FieldNames.Segment} eq '{segmentValue}' or {IndexConstants.FieldNames.Segment} eq '{IndexConstants.Variation.DefaultSegment}')");
+            filterClauses.Add(
+                $"({IndexConstants.FieldNames.Segment} eq '{segmentValue}' or {IndexConstants.FieldNames.Segment} eq '{IndexConstants.Variation.DefaultSegment}')");
         }
         else
         {
@@ -109,9 +114,33 @@ public class AzureSearchSearcher(IServerRoleAccessor serverRoleAccessor, IAzureS
         return filter switch
         {
             KeywordFilter keywordFilter => BuildKeywordFilter(keywordFilter),
+            IntegerExactFilter integerExactFilter => BuildIntegerExactFilter(integerExactFilter),
+            DecimalExactFilter decimalExactFilter => BuildDecimalExactFilter(decimalExactFilter),
             // TODO: Add other filter types as needed
             _ => string.Empty
         };
+    }
+
+    private static string BuildIntegerExactFilter(IntegerExactFilter filter)
+    {
+        var fieldName = $"{filter.FieldName}{IndexConstants.FieldTypePostfix.Integers}";
+        return BuildNumericExactFilter(fieldName, filter.Values.Select(v => v.ToString(CultureInfo.InvariantCulture)),
+            filter.Negate);
+    }
+
+    private static string BuildDecimalExactFilter(DecimalExactFilter filter)
+    {
+        var fieldName = $"{filter.FieldName}{IndexConstants.FieldTypePostfix.Decimals}";
+        return BuildNumericExactFilter(fieldName, filter.Values.Select(v => v.ToString(CultureInfo.InvariantCulture)),
+            filter.Negate);
+    }
+
+    private static string BuildNumericExactFilter(string fieldName, IEnumerable<string> rawValues, bool negate)
+    {
+        var values = rawValues.Select(v => $"{fieldName}/any(f: f eq {v})");
+        var clause = string.Join(" or ", values);
+
+        return negate ? $"not ({clause})" : $"({clause})";
     }
 
     private static string BuildKeywordFilter(KeywordFilter filter)
