@@ -172,6 +172,7 @@ public class DocumentMapper
                     IsCollection = true,
                     IsSortable = false,
                     IsSearchable = true,
+                    IsFacetable = false,
                     SourceField = field
                 };
             }
@@ -187,6 +188,7 @@ public class DocumentMapper
                     IsCollection = true,
                     IsSortable = false,
                     IsSearchable = true,
+                    IsFacetable = false,
                     SourceField = field
                 };
             }
@@ -202,6 +204,7 @@ public class DocumentMapper
                     IsCollection = true,
                     IsSortable = false,
                     IsSearchable = true,
+                    IsFacetable = false,
                     SourceField = field
                 };
             }
@@ -217,11 +220,12 @@ public class DocumentMapper
                     IsCollection = true,
                     IsSortable = false,
                     IsSearchable = true,
+                    IsFacetable = false,
                     SourceField = field
                 };
             }
 
-            // Keywords (exact match, filterable)
+            // Keywords (exact match, filterable, facetable)
             if (field.Value.Keywords?.Any() is true)
             {
                 yield return new IndexFieldMapping
@@ -232,11 +236,12 @@ public class DocumentMapper
                     IsCollection = true,
                     IsSortable = false,
                     IsSearchable = false,
+                    IsFacetable = true,
                     SourceField = field
                 };
             }
 
-            // Integers
+            // Integers (collection - filterable, facetable)
             if (field.Value.Integers?.Any() is true)
             {
                 yield return new IndexFieldMapping
@@ -247,11 +252,25 @@ public class DocumentMapper
                     IsCollection = true,
                     IsSortable = false,
                     IsSearchable = false,
+                    IsFacetable = true,
+                    SourceField = field
+                };
+
+                // Sortable integer field (single value - first value for sorting)
+                yield return new IndexFieldMapping
+                {
+                    FieldName = $"{field.FieldName}{IndexConstants.FieldTypePostfix.Integers}{IndexConstants.FieldTypePostfix.Sortable}",
+                    Values = [field.Value.Integers.First()],
+                    FieldType = SearchFieldDataType.Int64,
+                    IsCollection = false,
+                    IsSortable = true,
+                    IsSearchable = false,
+                    IsFacetable = false,
                     SourceField = field
                 };
             }
 
-            // Decimals
+            // Decimals (collection - filterable, facetable)
             if (field.Value.Decimals?.Any() is true)
             {
                 yield return new IndexFieldMapping
@@ -262,11 +281,25 @@ public class DocumentMapper
                     IsCollection = true,
                     IsSortable = false,
                     IsSearchable = false,
+                    IsFacetable = true,
+                    SourceField = field
+                };
+
+                // Sortable decimal field (single value - first value for sorting)
+                yield return new IndexFieldMapping
+                {
+                    FieldName = $"{field.FieldName}{IndexConstants.FieldTypePostfix.Decimals}{IndexConstants.FieldTypePostfix.Sortable}",
+                    Values = [field.Value.Decimals.First()],
+                    FieldType = SearchFieldDataType.Double,
+                    IsCollection = false,
+                    IsSortable = true,
+                    IsSearchable = false,
+                    IsFacetable = false,
                     SourceField = field
                 };
             }
 
-            // DateTimeOffsets
+            // DateTimeOffsets (collection - filterable, facetable)
             if (field.Value.DateTimeOffsets?.Any() is true)
             {
                 yield return new IndexFieldMapping
@@ -277,6 +310,20 @@ public class DocumentMapper
                     IsCollection = true,
                     IsSortable = false,
                     IsSearchable = false,
+                    IsFacetable = true,
+                    SourceField = field
+                };
+
+                // Sortable datetimeoffset field (single value - first value for sorting)
+                yield return new IndexFieldMapping
+                {
+                    FieldName = $"{field.FieldName}{IndexConstants.FieldTypePostfix.DateTimeOffsets}{IndexConstants.FieldTypePostfix.Sortable}",
+                    Values = [field.Value.DateTimeOffsets.First()],
+                    FieldType = SearchFieldDataType.DateTimeOffset,
+                    IsCollection = false,
+                    IsSortable = true,
+                    IsSearchable = false,
+                    IsFacetable = false,
                     SourceField = field
                 };
             }
@@ -298,6 +345,7 @@ public class DocumentMapper
                     IsCollection = false,
                     IsSortable = true,
                     IsSearchable = false,
+                    IsFacetable = false,
                     SourceField = field
                 };
             }

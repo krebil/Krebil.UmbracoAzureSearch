@@ -20,6 +20,8 @@ public class IndexFieldMapping
 
     public required bool IsSearchable { get; init; }
 
+    public required bool IsFacetable { get; init; }
+
     /// <summary>
     /// Reference to the original IndexField for additional metadata if needed
     /// </summary>

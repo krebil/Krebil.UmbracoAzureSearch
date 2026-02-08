@@ -19,7 +19,7 @@ public class AzureSearchIndexManager(
             return;
         indexAlias = indexAliasResolver.Resolve(indexAlias);
         var searchIndexClient = azureSearchClientFactory.GetSearchIndexClient();
-        var indexNames = await searchIndexClient.GetIndexNamesAsync().ToHashSetAsync(CancellationToken.None);
+        var indexNames = await searchIndexClient.GetIndexNamesAsync().ToHashSetAsync();
         if (indexNames.Contains(indexAlias))
             return;
         var newIndex = new SearchIndex(indexAlias, [

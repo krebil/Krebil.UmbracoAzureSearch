@@ -72,8 +72,8 @@ public class AzureSearchIndexer(
         var field = new SearchField(mapping.FieldName, searchFieldDataType)
         {
             IsFilterable = !mapping.IsSortable,
-            IsSortable = mapping.IsSortable || (!mapping.IsCollection && mapping.FieldType != SearchFieldDataType.String),
-            IsFacetable = !mapping.IsSortable && mapping.FieldType != SearchFieldDataType.String,
+            IsSortable = mapping.IsSortable,
+            IsFacetable = mapping.IsFacetable,
             IsSearchable = mapping.IsSearchable,
         };
 
