@@ -36,12 +36,6 @@ Add your Azure AI Search credentials to `appsettings.json`:
 Register the services via a composer:
 
 ```csharp
-using Umbraco.Cms.Core.Composing;
-using Umbraco.Cms.Search.Core.DependencyInjection;
-using UmbracoAzureSearch.Extensions;
-
-namespace YourSite.DependencyInjection;
-
 public sealed class SearchComposer : IComposer
 {
     public void Compose(IUmbracoBuilder builder)
@@ -54,18 +48,9 @@ public sealed class SearchComposer : IComposer
 
 ## Usage
 
-Inject `IAzureSearchSearcher` (or `ISearcherResolver` to resolve it by index alias) and call `SearchAsync`. See the [Umbraco Search documentation](https://github.com/umbraco/Umbraco.Cms.Search/blob/main/docs/searching.md) for the full API — filtering, faceting, sorting, pagination, culture/segment variants, and protected content all work the same way.
+Inject `IAzureSearchSearcher` (or `ISearcherResolver` to resolve it by index alias) and call `SearchAsync`. See the [Umbraco Search documentation](https://github.com/umbraco/Umbraco.Cms.Search/blob/main/docs/searching.md) for the full API: filtering, faceting, sorting, pagination, culture/segment variants, and protected content all work the same way.
 
 ```csharp
-using Umbraco.Cms.Search.Core.Models.Searching;
-using Umbraco.Cms.Search.Core.Models.Searching.Faceting;
-using Umbraco.Cms.Search.Core.Models.Searching.Filtering;
-using Umbraco.Cms.Search.Core.Models.Searching.Sorting;
-using UmbracoAzureSearch.Services.Searcher;
-using SearchConstants = Umbraco.Cms.Search.Core.Constants;
-
-namespace YourSite.Services;
-
 public class MySearchService(IAzureSearchSearcher searcher)
 {
     public async Task<SearchResult> SearchAsync(string query)
