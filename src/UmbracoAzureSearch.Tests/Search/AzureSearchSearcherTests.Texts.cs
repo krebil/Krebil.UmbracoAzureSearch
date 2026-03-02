@@ -39,7 +39,7 @@ public partial class AzureSearchSearcherTests
                 var documents = result.Documents.ToList();
                 Assert.That(
                     documents.Select(d => d.Id),
-                    Is.EqualTo(new[] { _documentIds[11], _documentIds[22], _documentIds[33] }).AsCollection
+                    Is.EquivalentTo(new[] { _documentIds[11], _documentIds[22], _documentIds[33] })
                 );
             }
         );
@@ -62,7 +62,7 @@ public partial class AzureSearchSearcherTests
                 var expectedIds = OddOrEvenIds(even);
                 Assert.That(
                     documents.Select(d => d.Id),
-                    Is.EqualTo(expectedIds.Select(id => _documentIds[id])).AsCollection
+                    Is.EquivalentTo(expectedIds.Select(id => _documentIds[id]))
                 );
             }
         );
@@ -81,7 +81,7 @@ public partial class AzureSearchSearcherTests
                 Assert.That(result.Total, Is.EqualTo(99));
                 Assert.That(
                     result.Documents.Select(d => d.Id),
-                    Is.EqualTo(_documentIds.Values.Except([_documentIds[12]])).AsCollection
+                    Is.EquivalentTo(_documentIds.Values.Except([_documentIds[12]]))
                 );
             }
         );
@@ -104,7 +104,7 @@ public partial class AzureSearchSearcherTests
                 var expectedIds = OddOrEvenIds(even is false);
                 Assert.That(
                     documents.Select(d => d.Id),
-                    Is.EqualTo(expectedIds.Select(id => _documentIds[id])).AsCollection
+                    Is.EquivalentTo(expectedIds.Select(id => _documentIds[id]))
                 );
             }
         );
@@ -121,7 +121,7 @@ public partial class AzureSearchSearcherTests
             () =>
             {
                 Assert.That(result.Total, Is.EqualTo(100));
-                Assert.That(result.Documents.Select(d => d.Id), Is.EqualTo(_documentIds.Values).AsCollection);
+                Assert.That(result.Documents.Select(d => d.Id), Is.EquivalentTo(_documentIds.Values));
             }
         );
     }

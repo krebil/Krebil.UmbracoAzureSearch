@@ -123,4 +123,23 @@ public class AzureSearchIndexer(
     {
         await azureSearchIndexManager.ResetAsync(indexAlias);
     }
+
+    public async Task<IndexMetadata> GetMetadataAsync(string indexAlias)
+    {
+        // use GetSearchClient to get the resolved index name (alias resolution happens inside the factory)
+        var resolvedIndexName = azureSearchClientFactory.GetSearchClient(indexAlias).IndexName;
+        var indexClient = azureSearchClientFactory.GetSearchIndexClient();
+
+        try
+        {
+            var response = await indexClient.GetIndexStatisticsAsync(resolvedIndexName);
+            var documentCount = response.Value.DocumentCount;
+            var healthStatus = documentCount > 0 ? HealthStatus.Healthy : HealthStatus.Empty;
+            return new IndexMetadata(documentCount, healthStatus);
+        }
+        catch
+        {
+            return new IndexMetadata(0, HealthStatus.Unknown);
+        }
+    }
 }

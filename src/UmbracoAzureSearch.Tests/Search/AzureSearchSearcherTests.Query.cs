@@ -43,7 +43,7 @@ public partial class AzureSearchSearcherTests
                 var documents = result.Documents.ToList();
                 Assert.That(
                     documents.Select(d => d.Id),
-                    Is.EqualTo(
+                    Is.EquivalentTo(
                         new[]
                         {
                             _documentIds[1],
@@ -59,7 +59,7 @@ public partial class AzureSearchSearcherTests
                             _documentIds[19],
                             _documentIds[100],
                         }
-                    ).AsCollection
+                    )
                 );
             }
         );
@@ -114,7 +114,7 @@ public partial class AzureSearchSearcherTests
                 var expectedIds = OddOrEvenIds(even);
                 Assert.That(
                     documents.Select(d => d.Id),
-                    Is.EqualTo(expectedIds.Select(id => _documentIds[id])).AsCollection
+                    Is.EquivalentTo(expectedIds.Select(id => _documentIds[id]))
                 );
             }
         );

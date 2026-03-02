@@ -29,7 +29,8 @@ public class AzureSearchIndexManager(
             },
             new SearchField(IndexConstants.FieldNames.Key, SearchFieldDataType.String)
             {
-                IsFilterable = true
+                IsFilterable = true,
+                IsSortable = true
             },
             new SearchField(IndexConstants.FieldNames.ObjectType, SearchFieldDataType.String)
             {
@@ -68,6 +69,21 @@ public class AzureSearchIndexManager(
                 IsFilterable = true
             }
         ]);
+
+        // Add scoring profile to boost text relevance fields (R1 > R2 > R3 > base)
+        var scoringProfile = new ScoringProfile("relevanceBoost")
+        {
+            TextWeights = new TextWeights(new Dictionary<string, double>
+            {
+                { IndexConstants.FieldNames.AllTextsR1, 4.0 },
+                { IndexConstants.FieldNames.AllTextsR2, 3.0 },
+                { IndexConstants.FieldNames.AllTextsR3, 2.0 },
+                { IndexConstants.FieldNames.AllTexts, 1.0 }
+            })
+        };
+        newIndex.ScoringProfiles.Add(scoringProfile);
+        newIndex.DefaultScoringProfile = "relevanceBoost";
+
         await searchIndexClient.CreateIndexAsync(newIndex);
     }
 

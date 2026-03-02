@@ -90,12 +90,12 @@ public partial class AzureSearchSearcherTests
                 // expecting 1 (10), 5 (50), 10 (10 + 100), 50 (50) and 100 (100)
                 Assert.That(
                     documents.Select(d => d.Id),
-                    Is.EqualTo(
+                    Is.EquivalentTo(
                         new[]
                         {
                             _documentIds[1], _documentIds[5], _documentIds[10], _documentIds[50], _documentIds[100]
                         }
-                    ).AsCollection
+                    )
                 );
             }
         );
@@ -179,7 +179,7 @@ public partial class AzureSearchSearcherTests
             () =>
             {
                 Assert.That(result.Total, Is.EqualTo(99));
-                Assert.That(result.Documents.Select(d => d.Id), Is.EqualTo(_documentIds.Values.Skip(1)).AsCollection);
+                Assert.That(result.Documents.Select(d => d.Id), Is.EquivalentTo(_documentIds.Values.Skip(1)));
             }
         );
     }

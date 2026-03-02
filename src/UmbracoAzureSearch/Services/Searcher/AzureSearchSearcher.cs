@@ -31,7 +31,8 @@ public class AzureSearchSearcher(
         string? segment = null,
         AccessContext? accessContext = null,
         int skip = 0,
-        int take = 10)
+        int take = 10,  
+        int maxSuggestions = 0)
     {
         var searchClient = azureSearchClientFactory.GetSearchClient(indexAlias);
 
@@ -57,69 +58,100 @@ public class AzureSearchSearcher(
             ? "*"
             : query.Contains(' ') ? query : $"{query}*";
 
-        // Build OData filter
-        var filterClauses = new List<string>();
+        // Build base filter clauses (culture/segment)
+        var baseFilterClauses = new List<string>();
 
         // Culture filter
         if (!string.IsNullOrWhiteSpace(culture))
         {
             var cultureValue = culture.IndexCulture();
-            filterClauses.Add(
+            baseFilterClauses.Add(
                 $"({IndexConstants.FieldNames.Culture} eq '{cultureValue}' or {IndexConstants.FieldNames.Culture} eq '{IndexConstants.Variation.InvariantCulture}')");
         }
         else
         {
-            filterClauses.Add($"{IndexConstants.FieldNames.Culture} eq '{IndexConstants.Variation.InvariantCulture}'");
+            baseFilterClauses.Add($"{IndexConstants.FieldNames.Culture} eq '{IndexConstants.Variation.InvariantCulture}'");
         }
 
         // Segment filter
         if (!string.IsNullOrWhiteSpace(segment))
         {
             var segmentValue = segment.IndexSegment();
-            filterClauses.Add(
+            baseFilterClauses.Add(
                 $"({IndexConstants.FieldNames.Segment} eq '{segmentValue}' or {IndexConstants.FieldNames.Segment} eq '{IndexConstants.Variation.DefaultSegment}')");
         }
         else
         {
-            filterClauses.Add($"{IndexConstants.FieldNames.Segment} eq '{IndexConstants.Variation.DefaultSegment}'");
+            baseFilterClauses.Add($"{IndexConstants.FieldNames.Segment} eq '{IndexConstants.Variation.DefaultSegment}'");
         }
 
-        // User-provided filters
-        if (filters != null)
-        {
-            foreach (var filter in filters)
-            {
-                var filterClause = BuildFilterClause(filter);
-                if (!string.IsNullOrEmpty(filterClause))
-                {
-                    filterClauses.Add(filterClause);
-                }
-            }
-        }
-
-        // Sorting
-        if (sorters != null)
-        {
-            foreach (var sorter in sorters)
-            {
-                var sortClause = BuildSortClause(sorter);
-                if (!string.IsNullOrEmpty(sortClause))
-                {
-                    searchOptions.OrderBy.Add(sortClause);
-                }
-            }
-        }
-
-        // Facets - deduplicate by field key (Azure Search doesn't allow multiple facets on same field)
+        // Split user filters into regular filters and same-field-as-facet filters
+        var filtersArray = filters?.ToArray() ?? [];
         var facetsList = facets?.ToList() ?? [];
+        var facetFieldNames = facetsList.Select(f => f.FieldName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var sameFieldFilters = filtersArray.Where(f => facetFieldNames.Contains(f.FieldName)).ToArray();
+        var regularFilters = filtersArray.Except(sameFieldFilters).ToArray();
+
+        // Build full filter clauses (for document query)
+        var filterClauses = new List<string>(baseFilterClauses);
+        foreach (var filter in filtersArray)
+        {
+            var filterClause = BuildFilterClause(filter);
+            if (!string.IsNullOrEmpty(filterClause))
+            {
+                filterClauses.Add(filterClause);
+            }
+        }
+
+        // Build facet filter clauses (excludes same-field filters for proper facet counts)
+        var facetFilterClauses = new List<string>(baseFilterClauses);
+        foreach (var filter in regularFilters)
+        {
+            var filterClause = BuildFilterClause(filter);
+            if (!string.IsNullOrEmpty(filterClause))
+            {
+                facetFilterClauses.Add(filterClause);
+            }
+        }
+
+        // Sorting - default to score descending when no sorters provided
+        var effectiveSorters = sorters?.ToArray() ?? [];
+        if (effectiveSorters.Length == 0)
+        {
+            effectiveSorters = [new ScoreSorter(Direction.Descending)];
+        }
+
+        foreach (var sorter in effectiveSorters)
+        {
+            var sortClause = BuildSortClause(sorter);
+            if (!string.IsNullOrEmpty(sortClause))
+            {
+                searchOptions.OrderBy.Add(sortClause);
+            }
+        }
+
+        // Facets - deduplicate by field key and separate into same-field and different-field groups
+        // NOTE: Azure Search does not allow multiple facet types on the same field in a single query
         var facetFieldMap = new Dictionary<string, List<Facet>>();
         var addedFacetFields = new HashSet<string>();
+        var sameFieldFacetExpressions = new List<string>(); // Facets on same field as a filter
+        var diffFieldFacetExpressions = new List<string>(); // Facets on different fields from all filters
+        var filterFieldNames = filtersArray.Select(f => f.FieldName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         foreach (var facet in facetsList)
         {
             var (facetExpression, fieldKey) = BuildFacetExpression(facet);
             if (!string.IsNullOrEmpty(facetExpression) && !addedFacetFields.Contains(fieldKey))
             {
-                searchOptions.Facets.Add(facetExpression);
+                // Determine if this facet is on a field that has a filter
+                if (filterFieldNames.Contains(facet.FieldName))
+                {
+                    sameFieldFacetExpressions.Add(facetExpression);
+                }
+                else
+                {
+                    diffFieldFacetExpressions.Add(facetExpression);
+                }
                 addedFacetFields.Add(fieldKey);
             }
             if (!facetFieldMap.ContainsKey(fieldKey))
@@ -129,6 +161,12 @@ public class AzureSearchSearcher(
             facetFieldMap[fieldKey].Add(facet);
         }
 
+        // Add different-field facets to main query (they get filtered counts)
+        foreach (var expr in diffFieldFacetExpressions)
+        {
+            searchOptions.Facets.Add(expr);
+        }
+
         // TODO: Add support for access context
 
         if (filterClauses.Any())
@@ -136,7 +174,7 @@ public class AzureSearchSearcher(
             searchOptions.Filter = string.Join(" and ", filterClauses);
         }
 
-        // Execute search
+        // Execute main search (for documents and different-field facets)
         var result = await searchClient.SearchAsync<SearchDocument>(searchText, searchOptions);
 
         // Extract documents from results
@@ -153,8 +191,48 @@ public class AzureSearchSearcher(
             }
         }
 
+        // Merge facet results from main query
+        var facetResultsData = new Dictionary<string, IList<AzureFacetResult>>();
+        if (result.Value.Facets != null)
+        {
+            foreach (var kvp in result.Value.Facets)
+            {
+                facetResultsData[kvp.Key] = kvp.Value;
+            }
+        }
+
+        // Run separate query for same-field facets (without same-field filters)
+        if (sameFieldFacetExpressions.Count > 0)
+        {
+            var facetSearchOptions = new SearchOptions
+            {
+                Size = 0, // Don't need documents, just facets
+                IncludeTotalCount = false,
+                SearchMode = SearchMode.All
+            };
+
+            foreach (var expr in sameFieldFacetExpressions)
+            {
+                facetSearchOptions.Facets.Add(expr);
+            }
+
+            if (facetFilterClauses.Any())
+            {
+                facetSearchOptions.Filter = string.Join(" and ", facetFilterClauses);
+            }
+
+            var facetResult = await searchClient.SearchAsync<SearchDocument>(searchText, facetSearchOptions);
+            if (facetResult.Value.Facets != null)
+            {
+                foreach (var kvp in facetResult.Value.Facets)
+                {
+                    facetResultsData[kvp.Key] = kvp.Value;
+                }
+            }
+        }
+
         // Parse facet results
-        var facetResults = ParseFacetResults(result.Value.Facets, facetFieldMap);
+        var facetResults = ParseFacetResults(facetResultsData, facetFieldMap);
 
         return new SearchResult(result.Value.TotalCount ?? 0, documents.ToArray(), facetResults.ToArray());
     }
@@ -170,7 +248,7 @@ public class AzureSearchSearcher(
             DecimalRangeFilter decimalRangeFilter => BuildDecimalRangeFilter(decimalRangeFilter),
             DateTimeOffsetExactFilter dateTimeOffsetExactFilter => BuildDateTimeOffsetExactFilter(dateTimeOffsetExactFilter),
             DateTimeOffsetRangeFilter dateTimeOffsetRangeFilter => BuildDateTimeOffsetRangeFilter(dateTimeOffsetRangeFilter),
-            TextFilter textFilter => BuildTextFilter(textFilter),
+            TextFilter textFilter => BuildTextFilterWithRelevance(textFilter),
             _ => string.Empty
         };
     }
@@ -185,7 +263,7 @@ public class AzureSearchSearcher(
     private static string BuildDecimalExactFilter(DecimalExactFilter filter)
     {
         var fieldName = $"{filter.FieldName}{IndexConstants.FieldTypePostfix.Decimals}";
-        return BuildNumericExactFilter(fieldName, filter.Values.Select(v => v.ToString(CultureInfo.InvariantCulture)),
+        return BuildNumericExactFilter(fieldName, filter.Values.Select(v => FormattableString.Invariant($"{v}")),
             filter.Negate);
     }
 
@@ -226,7 +304,11 @@ public class AzureSearchSearcher(
     {
         var fieldName = $"{filter.FieldName}{IndexConstants.FieldTypePostfix.Decimals}";
         var ranges = filter.Ranges.Select(r =>
-            $"{fieldName}/any(f: f ge {r.MinValue} and f lt {r.MaxValue})");
+        {
+            var minStr = FormattableString.Invariant($"{r.MinValue}");
+            var maxStr = FormattableString.Invariant($"{r.MaxValue}");
+            return $"{fieldName}/any(f: f ge {minStr} and f lt {maxStr})";
+        });
         var clause = string.Join(" or ", ranges);
 
         return filter.Negate ? $"not ({clause})" : $"({clause})";
@@ -254,14 +336,58 @@ public class AzureSearchSearcher(
 
     private static string BuildTextFilter(TextFilter filter)
     {
+        // Search the base _texts field using search.ismatchscoring() for scoring contribution
+        // Note: This searches only the base _texts field. For relevance-based sorting that
+        // differentiates between R1/R2/R3 text fields, see BuildTextFilterWithRelevance().
         var fieldName = $"{filter.FieldName}{IndexConstants.FieldTypePostfix.Texts}";
-        // Use search.ismatch for full-text search on collection fields
-        // Append * for prefix matching on each value
         var values = filter.Values.Select(v =>
-            $"search.ismatch('{EscapeODataString(v)}*', '{fieldName}')");
+            $"search.ismatchscoring('{EscapeODataString(v)}*', '{fieldName}')");
         var clause = string.Join(" or ", values);
 
         return filter.Negate ? $"not ({clause})" : $"({clause})";
+    }
+
+    private static string BuildTextFilterWithRelevance(TextFilter filter)
+    {
+        // Search all four text relevance fields with boosting to enable relevance-based sorting
+        // Uses search.ismatchscoring() with Lucene query syntax and field-specific boosts
+        // This matches Elasticsearch behavior where TextFilter searches all relevance fields with boosts
+        // Boost factors: R1=4.0, R2=3.0, R3=2.0, Base=1.0 (matching the scoring profile ratios)
+        // NOTE: This requires all four text fields to exist in the index schema
+        var baseFieldName = filter.FieldName;
+        var fieldR1 = $"{baseFieldName}{IndexConstants.FieldTypePostfix.TextsR1}";
+        var fieldR2 = $"{baseFieldName}{IndexConstants.FieldTypePostfix.TextsR2}";
+        var fieldR3 = $"{baseFieldName}{IndexConstants.FieldTypePostfix.TextsR3}";
+        var fieldBase = $"{baseFieldName}{IndexConstants.FieldTypePostfix.Texts}";
+
+        var allClauses = new List<string>();
+        foreach (var value in filter.Values)
+        {
+            var escapedValue = EscapeLuceneQuery(value);
+            // Use Lucene query syntax with field-specific boosts
+            // Higher boost on R1 fields means documents matching there rank higher
+            var luceneQuery = $"{fieldR1}:{escapedValue}*^4 OR {fieldR2}:{escapedValue}*^3 OR {fieldR3}:{escapedValue}*^2 OR {fieldBase}:{escapedValue}*";
+
+            // Use search.ismatchscoring with full Lucene query mode
+            // Parameters: query, fields (empty = use query's field specs), queryType, searchMode
+            allClauses.Add($"search.ismatchscoring('{EscapeODataString(luceneQuery)}', '', 'full', 'any')");
+        }
+
+        var clause = string.Join(" or ", allClauses);
+        return filter.Negate ? $"not ({clause})" : $"({clause})";
+    }
+
+    private static string EscapeLuceneQuery(string value)
+    {
+        // Escape special Lucene query characters, but preserve the query structure
+        // Characters that need escaping: + - && || ! ( ) { } [ ] ^ " ~ * ? : \ /
+        var specialChars = new[] { '+', '-', '&', '|', '!', '(', ')', '{', '}', '[', ']', '^', '"', '~', '?', ':', '\\', '/' };
+        var result = value;
+        foreach (var c in specialChars)
+        {
+            result = result.Replace(c.ToString(), "\\" + c);
+        }
+        return result;
     }
 
     private static string BuildSortClause(Sorter sorter)
@@ -273,7 +399,7 @@ public class AzureSearchSearcher(
             IntegerSorter s => $"{s.FieldName}{IndexConstants.FieldTypePostfix.Integers}{IndexConstants.FieldTypePostfix.Sortable} {direction}",
             DecimalSorter s => $"{s.FieldName}{IndexConstants.FieldTypePostfix.Decimals}{IndexConstants.FieldTypePostfix.Sortable} {direction}",
             DateTimeOffsetSorter s => $"{s.FieldName}{IndexConstants.FieldTypePostfix.DateTimeOffsets}{IndexConstants.FieldTypePostfix.Sortable} {direction}",
-            KeywordSorter s => $"{s.FieldName}{IndexConstants.FieldTypePostfix.Keywords} {direction}",
+            KeywordSorter s => $"{s.FieldName}{IndexConstants.FieldTypePostfix.Keywords}{IndexConstants.FieldTypePostfix.Sortable} {direction}",
             TextSorter s => $"{s.FieldName}{IndexConstants.FieldTypePostfix.Texts}{IndexConstants.FieldTypePostfix.Sortable} {direction}",
             ScoreSorter => $"search.score() {direction}",
             _ => string.Empty
@@ -391,45 +517,59 @@ public class AzureSearchSearcher(
 
         foreach (var range in facet.Ranges)
         {
-            // Find the Azure facet result that matches this range
-            // Azure range facets use AsRangeFacetResult<T>() with From/To properties
-            var minValue = range.MinValue;
-            AzureFacetResult? matchingFacet = null;
+            long count = 0;
 
-            if (minValue.HasValue)
+            foreach (var v in azureFacetValues)
             {
-                foreach (var v in azureFacetValues)
+                // Try to get range bounds from the Azure facet result
+                long? fromValue = null;
+
+                // Try as range facet with different numeric types
+                try
+                {
+                    var rangeFacet = v.AsRangeFacetResult<long>();
+                    fromValue = rangeFacet.From;
+                }
+                catch
                 {
                     try
                     {
-                        // Try as range facet first
-                        var rangeFacet = v.AsRangeFacetResult<long>();
-                        if (rangeFacet.From.HasValue && rangeFacet.From.Value == minValue.Value)
-                        {
-                            matchingFacet = v;
-                            break;
-                        }
+                        var rangeFacet = v.AsRangeFacetResult<double>();
+                        fromValue = rangeFacet.From.HasValue ? (long)rangeFacet.From.Value : null;
                     }
                     catch
                     {
-                        // Not a range facet, try value comparison
-                        if (v.Value != null)
+                        try
                         {
-                            try
+                            var rangeFacet = v.AsRangeFacetResult<int>();
+                            fromValue = rangeFacet.From;
+                        }
+                        catch
+                        {
+                            // Try Value property as fallback for non-range facets
+                            if (v.Value != null)
                             {
-                                if (Convert.ToInt64(v.Value) == minValue.Value)
-                                {
-                                    matchingFacet = v;
-                                    break;
-                                }
+                                try { fromValue = Convert.ToInt64(v.Value); }
+                                catch { /* ignore conversion errors */ }
                             }
-                            catch { }
                         }
                     }
                 }
+
+                // Match by From bound (MinValue)
+                if (range.MinValue.HasValue && fromValue.HasValue && fromValue.Value == range.MinValue.Value)
+                {
+                    count = v.Count ?? 0;
+                    break;
+                }
+                // Handle unbounded lower range (MinValue is null)
+                if (!range.MinValue.HasValue && !fromValue.HasValue)
+                {
+                    count = v.Count ?? 0;
+                    break;
+                }
             }
 
-            var count = matchingFacet?.Count ?? 0;
             facetValues.Add(new IntegerRangeFacetValue(range.Key, range.MinValue, range.MaxValue, count));
         }
 
@@ -442,23 +582,48 @@ public class AzureSearchSearcher(
 
         foreach (var range in facet.Ranges)
         {
-            var minValue = range.MinValue;
-            var matchingFacet = azureFacetValues.FirstOrDefault(v =>
+            long count = 0;
+
+            foreach (var v in azureFacetValues)
             {
-                if (!minValue.HasValue) return false;
+                double? fromValue = null;
+
                 try
                 {
                     var rangeFacet = v.AsRangeFacetResult<double>();
-                    if (rangeFacet.From == null) return false;
-                    return Math.Abs(rangeFacet.From.Value - (double)minValue.Value) < 0.0001;
+                    fromValue = rangeFacet.From;
                 }
                 catch
                 {
-                    return false;
+                    try
+                    {
+                        var rangeFacet = v.AsRangeFacetResult<decimal>();
+                        fromValue = rangeFacet.From.HasValue ? (double)rangeFacet.From.Value : null;
+                    }
+                    catch
+                    {
+                        if (v.Value != null)
+                        {
+                            try { fromValue = Convert.ToDouble(v.Value); }
+                            catch { /* ignore */ }
+                        }
+                    }
                 }
-            });
 
-            var count = matchingFacet?.Count ?? 0;
+                // Match by From bound with tolerance for floating point comparison
+                if (range.MinValue.HasValue && fromValue.HasValue &&
+                    Math.Abs(fromValue.Value - (double)range.MinValue.Value) < 0.0001)
+                {
+                    count = v.Count ?? 0;
+                    break;
+                }
+                if (!range.MinValue.HasValue && !fromValue.HasValue)
+                {
+                    count = v.Count ?? 0;
+                    break;
+                }
+            }
+
             facetValues.Add(new DecimalRangeFacetValue(range.Key, range.MinValue, range.MaxValue, count));
         }
 
@@ -471,24 +636,39 @@ public class AzureSearchSearcher(
 
         foreach (var range in facet.Ranges)
         {
-            // Compare by UTC ticks to handle timezone differences
-            var minUtcTicks = range.MinValue?.UtcTicks;
-            var matchingFacet = minUtcTicks.HasValue
-                ? azureFacetValues.FirstOrDefault(v =>
-                {
-                    try
-                    {
-                        var rangeFacet = v.AsRangeFacetResult<DateTimeOffset>();
-                        return rangeFacet.From?.UtcTicks == minUtcTicks.Value;
-                    }
-                    catch
-                    {
-                        return false;
-                    }
-                })
-                : null;
+            long count = 0;
 
-            var count = matchingFacet?.Count ?? 0;
+            foreach (var v in azureFacetValues)
+            {
+                DateTimeOffset? fromValue = null;
+
+                try
+                {
+                    var rangeFacet = v.AsRangeFacetResult<DateTimeOffset>();
+                    fromValue = rangeFacet.From;
+                }
+                catch
+                {
+                    if (v.Value is DateTimeOffset dto)
+                    {
+                        fromValue = dto;
+                    }
+                }
+
+                // Compare by UTC ticks to handle timezone differences
+                if (range.MinValue.HasValue && fromValue.HasValue &&
+                    fromValue.Value.UtcTicks == range.MinValue.Value.UtcTicks)
+                {
+                    count = v.Count ?? 0;
+                    break;
+                }
+                if (!range.MinValue.HasValue && !fromValue.HasValue)
+                {
+                    count = v.Count ?? 0;
+                    break;
+                }
+            }
+
             facetValues.Add(new DateTimeOffsetRangeFacetValue(range.Key, range.MinValue, range.MaxValue, count));
         }
 

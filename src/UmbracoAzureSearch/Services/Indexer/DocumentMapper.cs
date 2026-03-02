@@ -161,13 +161,22 @@ public class DocumentMapper
     {
         foreach (var field in variationFields)
         {
-            // Texts (highest relevance searchable text)
-            if (field.Value.Texts?.Any() is true)
+            // Texts (aggregates all text relevance levels for TextFilter support)
+            var allTexts = (field.Value.Texts ?? [])
+                .Concat(field.Value.TextsR1 ?? [])
+                .Concat(field.Value.TextsR2 ?? [])
+                .Concat(field.Value.TextsR3 ?? [])
+                .Distinct()
+                .ToArray();
+
+            // Always create all four text fields when ANY text content exists
+            // This ensures consistent schema for TextFilter relevance queries
+            if (allTexts.Length > 0)
             {
                 yield return new IndexFieldMapping
                 {
                     FieldName = $"{field.FieldName}{IndexConstants.FieldTypePostfix.Texts}",
-                    Values = field.Value.Texts.OfType<object>().ToArray(),
+                    Values = allTexts.OfType<object>().ToArray(),
                     FieldType = SearchFieldDataType.String,
                     IsCollection = true,
                     IsSortable = false,
@@ -175,15 +184,12 @@ public class DocumentMapper
                     IsFacetable = false,
                     SourceField = field
                 };
-            }
 
-            // TextsR1 (relevance 1)
-            if (field.Value.TextsR1?.Any() is true)
-            {
+                // TextsR1 (relevance 1) - always create when any text exists
                 yield return new IndexFieldMapping
                 {
                     FieldName = $"{field.FieldName}{IndexConstants.FieldTypePostfix.TextsR1}",
-                    Values = field.Value.TextsR1.OfType<object>().ToArray(),
+                    Values = (field.Value.TextsR1 ?? []).OfType<object>().ToArray(),
                     FieldType = SearchFieldDataType.String,
                     IsCollection = true,
                     IsSortable = false,
@@ -191,15 +197,12 @@ public class DocumentMapper
                     IsFacetable = false,
                     SourceField = field
                 };
-            }
 
-            // TextsR2 (relevance 2)
-            if (field.Value.TextsR2?.Any() is true)
-            {
+                // TextsR2 (relevance 2) - always create when any text exists
                 yield return new IndexFieldMapping
                 {
                     FieldName = $"{field.FieldName}{IndexConstants.FieldTypePostfix.TextsR2}",
-                    Values = field.Value.TextsR2.OfType<object>().ToArray(),
+                    Values = (field.Value.TextsR2 ?? []).OfType<object>().ToArray(),
                     FieldType = SearchFieldDataType.String,
                     IsCollection = true,
                     IsSortable = false,
@@ -207,15 +210,12 @@ public class DocumentMapper
                     IsFacetable = false,
                     SourceField = field
                 };
-            }
 
-            // TextsR3 (relevance 3)
-            if (field.Value.TextsR3?.Any() is true)
-            {
+                // TextsR3 (relevance 3) - always create when any text exists
                 yield return new IndexFieldMapping
                 {
                     FieldName = $"{field.FieldName}{IndexConstants.FieldTypePostfix.TextsR3}",
-                    Values = field.Value.TextsR3.OfType<object>().ToArray(),
+                    Values = (field.Value.TextsR3 ?? []).OfType<object>().ToArray(),
                     FieldType = SearchFieldDataType.String,
                     IsCollection = true,
                     IsSortable = false,
@@ -237,6 +237,19 @@ public class DocumentMapper
                     IsSortable = false,
                     IsSearchable = false,
                     IsFacetable = true,
+                    SourceField = field
+                };
+
+                // Sortable keyword field (single value - first value for sorting)
+                yield return new IndexFieldMapping
+                {
+                    FieldName = $"{field.FieldName}{IndexConstants.FieldTypePostfix.Keywords}{IndexConstants.FieldTypePostfix.Sortable}",
+                    Values = [field.Value.Keywords.First()],
+                    FieldType = SearchFieldDataType.String,
+                    IsCollection = false,
+                    IsSortable = true,
+                    IsSearchable = false,
+                    IsFacetable = false,
                     SourceField = field
                 };
             }

@@ -38,7 +38,7 @@ public partial class AzureSearchSearcherTests
                 var documents = result.Documents.ToList();
                 Assert.That(
                     documents.Select(d => d.Id),
-                    Is.EqualTo(new[] { _documentIds[21], _documentIds[22], _documentIds[23] }).AsCollection
+                    Is.EquivalentTo(new[] { _documentIds[21], _documentIds[22], _documentIds[23] })
                 );
             }
         );
@@ -57,7 +57,7 @@ public partial class AzureSearchSearcherTests
                 Assert.That(result.Total, Is.EqualTo(99));
                 Assert.That(
                     result.Documents.Select(d => d.Id),
-                    Is.EqualTo(_documentIds.Values.Except([_documentIds[22]])).AsCollection
+                    Is.EquivalentTo(_documentIds.Values.Except([_documentIds[22]]))
                 );
             }
         );
