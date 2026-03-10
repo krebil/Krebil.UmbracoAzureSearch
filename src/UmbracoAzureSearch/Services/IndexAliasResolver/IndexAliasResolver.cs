@@ -15,5 +15,5 @@ public class IndexAliasResolver : IIndexAliasResolver
         => ValidIndexAlias(_environment is null ? indexAlias : $"{indexAlias}_{_environment}");
 
     private static string ValidIndexAlias(string indexAlias)
-        => indexAlias.ToLowerInvariant();
+        => indexAlias.Replace("_","-").ToLowerInvariant();
 }

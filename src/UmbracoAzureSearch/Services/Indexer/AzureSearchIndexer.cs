@@ -7,6 +7,7 @@ using Umbraco.Cms.Core.Sync;
 using Umbraco.Cms.Search.Core.Models.Indexing;
 using UmbracoAzureSearch.Constants;
 using UmbracoAzureSearch.Services.Factory;
+using UmbracoAzureSearch.Services.IndexAliasResolver;
 using UmbracoAzureSearch.Services.IndexManager;
 
 namespace UmbracoAzureSearch.Services.Indexer;
@@ -15,6 +16,7 @@ public class AzureSearchIndexer(
     IAzureSearchClientFactory azureSearchClientFactory,
     IAzureSearchIndexManager azureSearchIndexManager,
     IServerRoleAccessor serverRoleAccessor,
+    IIndexAliasResolver indexAliasResolver,
     DocumentMapper documentMapper) : UmbracoAzureServiceBase(serverRoleAccessor), IAzureSearchIndexer
 {
     public async Task AddOrUpdateAsync(string indexAlias, Guid id, UmbracoObjectTypes objectType,
@@ -35,6 +37,7 @@ public class AzureSearchIndexer(
 
     private async Task EnsureFieldsExist(string indexAlias, List<IndexFieldMapping> fieldMappings)
     {
+        indexAlias = indexAliasResolver.Resolve(indexAlias);
         var indexClient = azureSearchClientFactory.GetSearchIndexClient();
         var index = await indexClient.GetIndexAsync(indexAlias);
         index.ThrowIfNull();
