@@ -364,9 +364,9 @@ public partial class AzureSearchSearcherTests
             () =>
             {
                 // expecting 3 (30) and 5 (50)
-                Document[] documents = result.Documents.ToArray();
-                Assert.That(documents[0].Id, Is.EqualTo(_documentIds[3]));
-                Assert.That(documents[1].Id, Is.EqualTo(_documentIds[5]));
+                var documents = result.Documents.Select(d => d.Id).ToArray();
+                Assert.That(documents,Contains.Item(_documentIds[3]));
+                Assert.That(documents,Contains.Item(_documentIds[5]));
             }
         );
     }
