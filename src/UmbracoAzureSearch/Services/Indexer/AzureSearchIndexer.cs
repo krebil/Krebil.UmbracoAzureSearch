@@ -1,6 +1,7 @@
 using Azure.Search.Documents;
 using Azure.Search.Documents.Indexes.Models;
 using Azure.Search.Documents.Models;
+using Microsoft.Extensions.Logging;
 using Throw;
 using Umbraco.Cms.Core.Models;
 using Umbraco.Cms.Core.Sync;
