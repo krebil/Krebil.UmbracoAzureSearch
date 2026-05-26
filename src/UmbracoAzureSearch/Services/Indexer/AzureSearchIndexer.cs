@@ -17,6 +17,7 @@ public class AzureSearchIndexer(
     IAzureSearchIndexManager azureSearchIndexManager,
     IServerRoleAccessor serverRoleAccessor,
     IIndexAliasResolver indexAliasResolver,
+    ILogger<AzureSearchIndexer> logger,
     DocumentMapper documentMapper) : UmbracoAzureServiceBase(serverRoleAccessor), IAzureSearchIndexer
 {
     public async Task AddOrUpdateAsync(string indexAlias, Guid id, UmbracoObjectTypes objectType,
@@ -32,7 +33,9 @@ public class AzureSearchIndexer(
 
         await EnsureFieldsExist(indexAlias, mappingResult.FieldMappings);
         var batch = IndexDocumentsBatch.MergeOrUpload(mappingResult.Documents);
+        logger.LogDebug("Indexing {DocumentCount} document(s) for {Id} into {IndexAlias}", mappingResult.Documents.Count, id, indexAlias);
         await searchClient.IndexDocumentsAsync(batch);
+        logger.LogDebug("Successfully indexed {DocumentCount} document(s) for {Id} into {IndexAlias}", mappingResult.Documents.Count, id, indexAlias);
     }
 
     private async Task EnsureFieldsExist(string indexAlias, List<IndexFieldMapping> fieldMappings)
