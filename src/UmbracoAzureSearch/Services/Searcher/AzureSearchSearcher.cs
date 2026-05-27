@@ -269,18 +269,22 @@ public class AzureSearchSearcher(
 
     private static string BuildNumericExactFilter(string fieldName, IEnumerable<string> rawValues, bool negate)
     {
-        var values = rawValues.Select(v => $"{fieldName}/any(f: f eq {v})");
-        var clause = string.Join(" or ", values);
+        var valueList = rawValues.ToArray();
+        if (valueList.Length == 0)
+            return string.Empty;
 
+        var clause = string.Join(" or ", valueList.Select(v => $"{fieldName}/any(f: f eq {v})"));
         return negate ? $"not ({clause})" : $"({clause})";
     }
 
     private static string BuildKeywordFilter(KeywordFilter filter)
     {
         var fieldName = $"{filter.FieldName}{IndexConstants.FieldTypePostfix.Keywords}";
-        var values = filter.Values.Select(v => $"k eq '{EscapeODataString(v)}'");
-        var condition = string.Join(" or ", values);
+        var valueList = filter.Values.ToArray();
+        if (valueList.Length == 0)
+            return string.Empty;
 
+        var condition = string.Join(" or ", valueList.Select(v => $"k eq '{EscapeODataString(v)}'"));
         var clause = $"{fieldName}/any(k: {condition})";
         return filter.Negate ? $"not ({clause})" : clause;
     }
@@ -292,35 +296,41 @@ public class AzureSearchSearcher(
 
     private static string BuildIntegerRangeFilter(IntegerRangeFilter filter)
     {
-        var fieldName = $"{filter.FieldName}{IndexConstants.FieldTypePostfix.Integers}";
-        var ranges = filter.Ranges.Select(r =>
-            $"{fieldName}/any(f: f ge {r.MinValue} and f lt {r.MaxValue})");
-        var clause = string.Join(" or ", ranges);
+        var rangeList = filter.Ranges.ToArray();
+        if (rangeList.Length == 0)
+            return string.Empty;
 
+        var fieldName = $"{filter.FieldName}{IndexConstants.FieldTypePostfix.Integers}";
+        var clause = string.Join(" or ", rangeList.Select(r =>
+            $"{fieldName}/any(f: f ge {r.MinValue} and f lt {r.MaxValue})"));
         return filter.Negate ? $"not ({clause})" : $"({clause})";
     }
 
     private static string BuildDecimalRangeFilter(DecimalRangeFilter filter)
     {
+        var rangeList = filter.Ranges.ToArray();
+        if (rangeList.Length == 0)
+            return string.Empty;
+
         var fieldName = $"{filter.FieldName}{IndexConstants.FieldTypePostfix.Decimals}";
-        var ranges = filter.Ranges.Select(r =>
+        var clause = string.Join(" or ", rangeList.Select(r =>
         {
             var minStr = FormattableString.Invariant($"{r.MinValue}");
             var maxStr = FormattableString.Invariant($"{r.MaxValue}");
             return $"{fieldName}/any(f: f ge {minStr} and f lt {maxStr})";
-        });
-        var clause = string.Join(" or ", ranges);
-
+        }));
         return filter.Negate ? $"not ({clause})" : $"({clause})";
     }
 
     private static string BuildDateTimeOffsetExactFilter(DateTimeOffsetExactFilter filter)
     {
-        var fieldName = $"{filter.FieldName}{IndexConstants.FieldTypePostfix.DateTimeOffsets}";
-        var values = filter.Values.Select(v =>
-            $"{fieldName}/any(f: f eq {v.ToString("O", CultureInfo.InvariantCulture)})");
-        var clause = string.Join(" or ", values);
+        var valueList = filter.Values.ToArray();
+        if (valueList.Length == 0)
+            return string.Empty;
 
+        var fieldName = $"{filter.FieldName}{IndexConstants.FieldTypePostfix.DateTimeOffsets}";
+        var clause = string.Join(" or ", valueList.Select(v =>
+            $"{fieldName}/any(f: f eq {v.ToString("O", CultureInfo.InvariantCulture)})"));
         return filter.Negate ? $"not ({clause})" : $"({clause})";
     }
 
