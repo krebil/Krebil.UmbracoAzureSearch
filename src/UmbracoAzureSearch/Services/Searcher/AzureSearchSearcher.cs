@@ -58,6 +58,12 @@ public class AzureSearchSearcher(
             ? "*"
             : query.Contains(' ') ? query : $"{query}*";
 
+        // Enable full Lucene query mode when the query uses field:value or boost (^) syntax
+        if (!string.IsNullOrWhiteSpace(query) && (query.Contains(':') || query.Contains('^')))
+        {
+            searchOptions.QueryType = SearchQueryType.Full;
+        }
+
         // Build base filter clauses (culture/segment)
         var baseFilterClauses = new List<string>();
 
