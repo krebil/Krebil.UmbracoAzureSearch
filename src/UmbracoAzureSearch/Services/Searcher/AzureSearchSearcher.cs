@@ -10,6 +10,7 @@ using Umbraco.Cms.Search.Core.Models.Searching.Filtering;
 using Umbraco.Cms.Search.Core.Models.Searching.Sorting;
 using UmbracoAzureSearch.Constants;
 using UmbracoAzureSearch.Extensions;
+using UmbracoAzureSearch.Models;
 using UmbracoAzureSearch.Services.Factory;
 using UmbracoFacetResult = Umbraco.Cms.Search.Core.Models.Searching.Faceting.FacetResult;
 using AzureFacetResult = Azure.Search.Documents.Models.FacetResult;
@@ -247,6 +248,7 @@ public class AzureSearchSearcher(
     {
         return filter switch
         {
+            KeywordAnyFilter keywordAnyFilter => BuildKeywordAnyFilter(keywordAnyFilter),
             KeywordFilter keywordFilter => BuildKeywordFilter(keywordFilter),
             IntegerExactFilter integerExactFilter => BuildIntegerExactFilter(integerExactFilter),
             IntegerRangeFilter integerRangeFilter => BuildIntegerRangeFilter(integerRangeFilter),
@@ -281,6 +283,13 @@ public class AzureSearchSearcher(
 
         var clause = string.Join(" or ", valueList.Select(v => $"{fieldName}/any(f: f eq {v})"));
         return negate ? $"not ({clause})" : $"({clause})";
+    }
+
+    private static string BuildKeywordAnyFilter(KeywordAnyFilter filter)
+    {
+        var fieldName = $"{filter.FieldName}{IndexConstants.FieldTypePostfix.Keywords}";
+        var clause = $"{fieldName}/any()";
+        return filter.Negate ? $"not ({clause})" : clause;
     }
 
     private static string BuildKeywordFilter(KeywordFilter filter)
