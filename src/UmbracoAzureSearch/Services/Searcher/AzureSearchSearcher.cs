@@ -279,7 +279,6 @@ public class AzureSearchSearcher(
         return filter switch
         {
             KeywordAnyFilter keywordAnyFilter => BuildKeywordAnyFilter(keywordAnyFilter),
-            StringExactFilter stringExactFilter => BuildStringExactFilter(stringExactFilter),
             KeywordFilter keywordFilter => BuildKeywordFilter(keywordFilter),
             IntegerExactFilter integerExactFilter => BuildIntegerExactFilter(integerExactFilter),
             IntegerRangeFilter integerRangeFilter => BuildIntegerRangeFilter(integerRangeFilter),
@@ -314,13 +313,6 @@ public class AzureSearchSearcher(
 
         var clause = string.Join(" or ", valueList.Select(v => $"{fieldName}/any(f: f eq {v})"));
         return negate ? $"not ({clause})" : $"({clause})";
-    }
-
-    private static string BuildStringExactFilter(StringExactFilter filter)
-    {
-        var escaped = EscapeODataString(filter.Value);
-        var clause = $"{filter.FieldName} eq '{escaped}'";
-        return filter.Negate ? $"{filter.FieldName} ne '{escaped}'" : clause;
     }
 
     private static string BuildKeywordAnyFilter(KeywordAnyFilter filter)
