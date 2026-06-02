@@ -8,6 +8,7 @@ using Umbraco.Cms.Search.Core.Models.Searching;
 using Umbraco.Cms.Search.Core.Models.Searching.Faceting;
 using Umbraco.Cms.Search.Core.Models.Searching.Filtering;
 using Umbraco.Cms.Search.Core.Models.Searching.Sorting;
+using Umbraco.Cms.Search.Core.Services;
 using UmbracoAzureSearch.Constants;
 using UmbracoAzureSearch.Extensions;
 using UmbracoAzureSearch.Models;
@@ -22,7 +23,7 @@ public class AzureSearchSearcher(
     IAzureSearchClientFactory azureSearchClientFactory)
     : UmbracoAzureServiceBase(serverRoleAccessor), IAzureSearchSearcher
 {
-    public async Task<SearchResult> SearchAsync(
+    public Task<SearchResult> SearchAsync(
         string indexAlias,
         string? query = null,
         IEnumerable<Filter>? filters = null,
@@ -32,8 +33,42 @@ public class AzureSearchSearcher(
         string? segment = null,
         AccessContext? accessContext = null,
         int skip = 0,
-        int take = 10,  
-        int maxSuggestions = 0)
+        int take = 10,
+        int maxSuggestions = 0,
+        SearchQueryType queryType = SearchQueryType.Simple,
+        SearchMode searchMode = SearchMode.All)
+        => SearchCoreAsync(indexAlias, query, filters, facets, sorters, culture, segment,
+            accessContext, skip, take, queryType, searchMode);
+
+    // Explicit ISearcher implementation forwards to the core method with defaults.
+    Task<SearchResult> ISearcher.SearchAsync(
+        string indexAlias,
+        string? query,
+        IEnumerable<Filter>? filters,
+        IEnumerable<Facet>? facets,
+        IEnumerable<Sorter>? sorters,
+        string? culture,
+        string? segment,
+        AccessContext? accessContext,
+        int skip,
+        int take,
+        int maxSuggestions)
+        => SearchCoreAsync(indexAlias, query, filters, facets, sorters, culture, segment,
+            accessContext, skip, take, SearchQueryType.Simple, SearchMode.All);
+
+    private async Task<SearchResult> SearchCoreAsync(
+        string indexAlias,
+        string? query,
+        IEnumerable<Filter>? filters,
+        IEnumerable<Facet>? facets,
+        IEnumerable<Sorter>? sorters,
+        string? culture,
+        string? segment,
+        AccessContext? accessContext,
+        int skip,
+        int take,
+        SearchQueryType queryType,
+        SearchMode searchMode)
     {
         var searchClient = azureSearchClientFactory.GetSearchClient(indexAlias);
 
@@ -42,7 +77,8 @@ public class AzureSearchSearcher(
             Skip = skip,
             Size = take,
             IncludeTotalCount = true,
-            SearchMode = SearchMode.All // AND matching for multi-word queries
+            QueryType = queryType,
+            SearchMode = searchMode
         };
 
         // Build the search query
@@ -58,12 +94,6 @@ public class AzureSearchSearcher(
         var searchText = string.IsNullOrWhiteSpace(query)
             ? "*"
             : query.Contains(' ') ? query : $"{query}*";
-
-        // Enable full Lucene query mode when the query uses field:value or boost (^) syntax
-        if (!string.IsNullOrWhiteSpace(query) && (query.Contains(':') || query.Contains('^')))
-        {
-            searchOptions.QueryType = SearchQueryType.Full;
-        }
 
         // Build base filter clauses (culture/segment)
         var baseFilterClauses = new List<string>();
@@ -249,6 +279,7 @@ public class AzureSearchSearcher(
         return filter switch
         {
             KeywordAnyFilter keywordAnyFilter => BuildKeywordAnyFilter(keywordAnyFilter),
+            StringExactFilter stringExactFilter => BuildStringExactFilter(stringExactFilter),
             KeywordFilter keywordFilter => BuildKeywordFilter(keywordFilter),
             IntegerExactFilter integerExactFilter => BuildIntegerExactFilter(integerExactFilter),
             IntegerRangeFilter integerRangeFilter => BuildIntegerRangeFilter(integerRangeFilter),
@@ -283,6 +314,13 @@ public class AzureSearchSearcher(
 
         var clause = string.Join(" or ", valueList.Select(v => $"{fieldName}/any(f: f eq {v})"));
         return negate ? $"not ({clause})" : $"({clause})";
+    }
+
+    private static string BuildStringExactFilter(StringExactFilter filter)
+    {
+        var escaped = EscapeODataString(filter.Value);
+        var clause = $"{filter.FieldName} eq '{escaped}'";
+        return filter.Negate ? $"{filter.FieldName} ne '{escaped}'" : clause;
     }
 
     private static string BuildKeywordAnyFilter(KeywordAnyFilter filter)

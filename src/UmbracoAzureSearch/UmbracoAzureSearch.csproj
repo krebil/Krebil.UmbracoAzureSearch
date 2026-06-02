@@ -7,17 +7,17 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <Version>1.0.0-beta.5</Version>
+    <Version>1.0.0-beta.8</Version>
     <PackageId>Krebil.UmbracoAzureSearch</PackageId>
     <Product>Krebil.UmbracoAzureSearch</Product>
-    <Title>Krebil.UmbracoAzureSearch</Title>
+    <Title>Azure AI Search Provider for Umbraco.Search</Title>
     <Description>Azure AI Search provider for Umbraco Search</Description>
     <Authors>krebil</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/krebil/Krebil.UmbracoAzureSearch</PackageProjectUrl>
     <RepositoryUrl>https://github.com/krebil/Krebil.UmbracoAzureSearch</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageTags>umbraco;azure;search;azure-ai-search</PackageTags>
+    <PackageTags>umbraco;azure;search;azure-ai-search;umbraco-marketplace</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
@@ -27,10 +27,10 @@
     <PackageReference Include="Azure.Search.Documents" Version="11.7.0" />
     <PackageReference Include="Throw" Version="1.4.0" />
     <PackageReference Include="Umbraco.Cms.Search.Core" Version="1.0.0-alpha.8" />
-    <PackageReference Include="Umbraco.Cms.Web.Website" Version="[17.3.4,18.0.0)" />
-    <PackageReference Include="Umbraco.Cms.Web.Common" Version="[17.3.4,18.0.0)" />
-    <PackageReference Include="Umbraco.Cms.Api.Common" Version="[17.3.4,18.0.0)" />
-    <PackageReference Include="Umbraco.Cms.Api.Management" Version="[17.3.4,18.0.0)" />
+    <PackageReference Include="Umbraco.Cms.Web.Website" Version="[17.0.0,18.0.0)" />
+    <PackageReference Include="Umbraco.Cms.Web.Common" Version="[17.0.0,18.0.0)" />
+    <PackageReference Include="Umbraco.Cms.Api.Common" Version="[17.0.0,18.0.0)" />
+    <PackageReference Include="Umbraco.Cms.Api.Management" Version="[17.0.0,18.0.0)" />
   </ItemGroup>
 
   <ItemGroup>

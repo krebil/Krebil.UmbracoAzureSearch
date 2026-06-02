@@ -2,6 +2,8 @@
 
 An [Azure AI Search](https://azure.microsoft.com/en-us/products/ai-services/ai-search) provider for [Umbraco Search](https://github.com/umbraco/Umbraco.Cms.Search).
 
+[![NuGet](https://img.shields.io/nuget/v/Krebil.UmbracoAzureSearch)](https://www.nuget.org/packages/Krebil.UmbracoAzureSearch)
+
 > **Note:** Umbraco Search is a work in progress. Things might change at a moment's notice.
 
 ## Prerequisites
