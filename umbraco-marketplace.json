@@ -1,0 +1,17 @@
+{
+  "$schema": "https://marketplace.umbraco.com/umbraco-marketplace-schema.json",
+  "Title": "Azure AI Search Provider for Umbraco.Search",
+  "Description": "Plug Azure AI Search into Umbraco Search as a fully-featured provider: filtering, faceting, sorting, culture/segment variants, and protected content out of the box.",
+  "Category": "Search",
+  "PackageType": "Package",
+  "LicenseTypes": ["Free"],
+  "DocumentationUrl": "https://github.com/krebil/Krebil.UmbracoAzureSearch#readme",
+  "IssueTrackerUrl": "https://github.com/krebil/Krebil.UmbracoAzureSearch/issues",
+  "LookingForContributors": false,
+  "Tags": ["azure", "azure-ai-search", "search", "headless", "delivery-api"],
+  "AuthorDetails": {
+    "Name": "krebil",
+    "Url": "https://github.com/krebil",
+    "SyncContributorsFromRepository": true
+  }
+}
