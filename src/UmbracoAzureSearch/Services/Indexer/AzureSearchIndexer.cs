@@ -35,8 +35,21 @@ public class AzureSearchIndexer(
         await EnsureFieldsExist(indexAlias, mappingResult.FieldMappings);
         var batch = IndexDocumentsBatch.MergeOrUpload(mappingResult.Documents);
         logger.LogDebug("Indexing {DocumentCount} document(s) for {Id} into {IndexAlias}", mappingResult.Documents.Count, id, indexAlias);
-        await searchClient.IndexDocumentsAsync(batch);
-        logger.LogDebug("Successfully indexed {DocumentCount} document(s) for {Id} into {IndexAlias}", mappingResult.Documents.Count, id, indexAlias);
+        var result = await searchClient.IndexDocumentsAsync(batch, new IndexDocumentsOptions { ThrowOnAnyError = false });
+        var failed = result.Value.Results.Where(r => !r.Succeeded).ToList();
+        if (failed.Count > 0)
+        {
+            foreach (var failure in failed)
+            {
+                logger.LogError(
+                    "Failed to index document {DocumentKey} for content {Id} into {IndexAlias}: [{StatusCode}] {ErrorMessage}",
+                    failure.Key, id, indexAlias, failure.Status, failure.ErrorMessage);
+            }
+        }
+        else
+        {
+            logger.LogDebug("Successfully indexed {DocumentCount} document(s) for {Id} into {IndexAlias}", mappingResult.Documents.Count, id, indexAlias);
+        }
     }
 
     private async Task EnsureFieldsExist(string indexAlias, List<IndexFieldMapping> fieldMappings)
@@ -122,7 +135,18 @@ public class AzureSearchIndexer(
         // Delete by the primary key field (Id)
         if (documentIds.Any())
         {
-            await searchClient.DeleteDocumentsAsync(IndexConstants.FieldNames.Id, documentIds);
+            logger.LogDebug("Deleting {DocumentCount} document(s) from {IndexAlias} for ids {Ids}", documentIds.Count, indexAlias, ids);
+            var deleteResult = await searchClient.DeleteDocumentsAsync(IndexConstants.FieldNames.Id, documentIds, new IndexDocumentsOptions { ThrowOnAnyError = false });
+            var failedDeletes = deleteResult.Value.Results.Where(r => !r.Succeeded).ToList();
+            if (failedDeletes.Count > 0)
+            {
+                foreach (var failure in failedDeletes)
+                {
+                    logger.LogError(
+                        "Failed to delete document {DocumentKey} from {IndexAlias}: [{StatusCode}] {ErrorMessage}",
+                        failure.Key, indexAlias, failure.Status, failure.ErrorMessage);
+                }
+            }
         }
     }
 
