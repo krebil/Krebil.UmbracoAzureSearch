@@ -50,19 +50,27 @@ public class AzureSearchIndexManager(
             },
             new SearchField(IndexConstants.FieldNames.AllTexts, SearchFieldDataType.Collection(SearchFieldDataType.String))
             {
-                IsSearchable = true
+                IsSearchable = true,
+                IsFilterable = false,
+                IsFacetable = false
             },
             new SearchField(IndexConstants.FieldNames.AllTextsR1, SearchFieldDataType.Collection(SearchFieldDataType.String))
             {
-                IsSearchable = true
+                IsSearchable = true,
+                IsFilterable = false,
+                IsFacetable = false
             },
             new SearchField(IndexConstants.FieldNames.AllTextsR2, SearchFieldDataType.Collection(SearchFieldDataType.String))
             {
-                IsSearchable = true
+                IsSearchable = true,
+                IsFilterable = false,
+                IsFacetable = false
             },
             new SearchField(IndexConstants.FieldNames.AllTextsR3, SearchFieldDataType.Collection(SearchFieldDataType.String))
             {
-                IsSearchable = true
+                IsSearchable = true,
+                IsFilterable = false,
+                IsFacetable = false
             }
         ]);
 
