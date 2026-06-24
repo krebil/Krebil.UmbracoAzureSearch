@@ -3,6 +3,8 @@ namespace UmbracoAzureSearch.Constants;
 
 internal static class IndexConstants
 {
+    public const string ProviderIdentifier = "Krebil.UmbracoAzureSearch";
+
     public static class Variation
     {
         public const string InvariantCulture = "inv";

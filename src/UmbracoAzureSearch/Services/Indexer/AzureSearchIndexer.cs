@@ -142,11 +142,11 @@ public class AzureSearchIndexer(
             var response = await indexClient.GetIndexStatisticsAsync(resolvedIndexName);
             var documentCount = response.Value.DocumentCount;
             var healthStatus = documentCount > 0 ? HealthStatus.Healthy : HealthStatus.Empty;
-            return new IndexMetadata(documentCount, healthStatus);
+            return new IndexMetadata(documentCount, healthStatus, IndexConstants.ProviderIdentifier);
         }
         catch
         {
-            return new IndexMetadata(0, HealthStatus.Unknown);
+            return new IndexMetadata(0, HealthStatus.Unknown, IndexConstants.ProviderIdentifier);
         }
     }
 }

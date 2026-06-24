@@ -5,14 +5,13 @@ using Umbraco.Cms.Search.Core.Services.ContentIndexing;
 namespace UmbracoAzureSearch.NotificationHandlers;
 
 /// <inheritdoc />
-public class RebuildIndicesNotificationHandler(  IContentIndexingService contentIndexingService) : INotificationHandler<UmbracoApplicationStartedNotification>
+public class RebuildIndicesNotificationHandler(IContentIndexingService contentIndexingService, IOriginProvider originProvider) : INotificationHandler<UmbracoApplicationStartedNotification>
 {
     /// <inheritdoc />
     public void Handle(UmbracoApplicationStartedNotification notification)
     {
-        contentIndexingService.Rebuild((Umbraco.Cms.Search.Core.Constants.IndexAliases.PublishedContent));
-        contentIndexingService.Rebuild((Umbraco.Cms.Search.Core.Constants.IndexAliases.DraftContent));
-        //contentIndexingService.Rebuild((Umbraco.Cms.Search.Core.Constants.IndexAliases.DraftMedia));
-        //contentIndexingService.Rebuild((Umbraco.Cms.Search.Core.Constants.IndexAliases.DraftMembers));
-    } 
+        var origin = originProvider.GetCurrent();
+        contentIndexingService.Rebuild(Umbraco.Cms.Search.Core.Constants.IndexAliases.PublishedContent, origin);
+        contentIndexingService.Rebuild(Umbraco.Cms.Search.Core.Constants.IndexAliases.DraftContent, origin);
+    }
 }

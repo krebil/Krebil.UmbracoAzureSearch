@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Azure.Search.Documents.Indexes.Models;
 using Azure.Search.Documents.Models;
 using Umbraco.Cms.Core.Models;
@@ -11,6 +12,15 @@ namespace UmbracoAzureSearch.Services.Indexer;
 
 public class DocumentMapper
 {
+    private static readonly Regex HtmlTagPattern =
+        new(@"<[^>]+>", RegexOptions.Compiled, TimeSpan.FromSeconds(1));
+
+    private static string[]? StripHtml(IEnumerable<string>? values)
+        => values?
+            .Select(v => HtmlTagPattern.Replace(v, " ").Trim())
+            .Where(v => v.Length > 0)
+            .ToArray();
+
     public record MappingResult
     {
         public required List<SearchDocument> Documents { get; init; }
@@ -113,6 +123,23 @@ public class DocumentMapper
                 }
             )
             .WhereNotNull()
+            .ToArray();
+
+        // Strip HTML tags from all text values. Property editors (block lists, RTEs) can emit
+        // large HTML blobs with inline styles. Azure Search imposes a 32,766-byte UTF-8 term
+        // limit on any field that is filterable, sortable, or facetable — including the per-field
+        // _texts_sort fields — so we sanitize here rather than at the field definition level.
+        variationFields = variationFields
+            .Select(field => field with
+            {
+                Value = field.Value with
+                {
+                    Texts   = StripHtml(field.Value.Texts),
+                    TextsR1 = StripHtml(field.Value.TextsR1),
+                    TextsR2 = StripHtml(field.Value.TextsR2),
+                    TextsR3 = StripHtml(field.Value.TextsR3),
+                }
+            })
             .ToArray();
 
         // all text fields for "free text query on all fields"
