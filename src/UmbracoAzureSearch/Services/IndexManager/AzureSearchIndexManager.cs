@@ -1,7 +1,9 @@
 using Azure.Search.Documents.Indexes.Models;
+using Microsoft.Extensions.Options;
 using Throw;
 using Umbraco.Cms.Core.Sync;
 using UmbracoAzureSearch.Constants;
+using UmbracoAzureSearch.Models;
 using UmbracoAzureSearch.Services.Factory;
 using UmbracoAzureSearch.Services.IndexAliasResolver;
 
@@ -10,7 +12,8 @@ namespace UmbracoAzureSearch.Services.IndexManager;
 public class AzureSearchIndexManager(
     IServerRoleAccessor serverRoleAccessor,
     IIndexAliasResolver indexAliasResolver,
-    IAzureSearchClientFactory azureSearchClientFactory)
+    IAzureSearchClientFactory azureSearchClientFactory,
+    IOptions<UmbracoAzureSearchOptions> azureSearchOptions)
     : UmbracoAzureServiceBase(serverRoleAccessor), IAzureSearchIndexManager
 {
     public async Task EnsureAsync(string indexAlias)
@@ -19,7 +22,22 @@ public class AzureSearchIndexManager(
             return;
         indexAlias = indexAliasResolver.Resolve(indexAlias);
         var searchIndexClient = azureSearchClientFactory.GetSearchIndexClient();
-        var indexNames = await searchIndexClient.GetIndexNamesAsync().ToHashSetAsync();
+        var indexNames = new HashSet<string>();
+        if (azureSearchOptions.Value.IsServerless)
+        {
+            // Serverless requires the paged list call; see AzureSearchClientFactory.
+            await foreach (var existingIndex in searchIndexClient.GetIndexesAsync(top: 1000))
+            {
+                indexNames.Add(existingIndex.Name);
+            }
+        }
+        else
+        {
+            await foreach (var existingIndexName in searchIndexClient.GetIndexNamesAsync())
+            {
+                indexNames.Add(existingIndexName);
+            }
+        }
         if (indexNames.Contains(indexAlias))
             return;
         var newIndex = new SearchIndex(indexAlias, [

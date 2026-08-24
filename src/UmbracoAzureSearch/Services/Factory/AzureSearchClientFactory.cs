@@ -17,8 +17,18 @@ public class AzureSearchClientFactory(IOptions<UmbracoAzureSearchOptions> azureS
     {
         _azureSearchOptions.Endpoint.ThrowIfNull();
         _azureSearchOptions.Key.ThrowIfNull();
-        return new SearchIndexClient(new Uri(_azureSearchOptions.Endpoint),
-            new AzureKeyCredential(_azureSearchOptions.Key));
+        var endpoint = new Uri(_azureSearchOptions.Endpoint);
+        var credential = new AzureKeyCredential(_azureSearchOptions.Key);
+
+        // Serverless services reject unpaged list calls and need the preview API
+        // version that supports paging. Standard tiers stay on the stable version.
+        if (_azureSearchOptions.IsServerless)
+        {
+            var options = new SearchClientOptions(SearchClientOptions.ServiceVersion.V2026_05_01_Preview);
+            return new SearchIndexClient(endpoint, credential, options);
+        }
+
+        return new SearchIndexClient(endpoint, credential);
     }
 
     public SearchClient GetSearchClient(string indexAlias)

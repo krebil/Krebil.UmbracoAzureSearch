@@ -10,4 +10,6 @@ public class UmbracoAzureSearchOptions
     public bool EnableDebugMode { get; set; }
 
     public string? Environment { get; set; }
+
+    public bool IsServerless { get; set; }
 }
