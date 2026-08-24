@@ -34,7 +34,7 @@ public static class ServiceCollectionExtensions
 
     public static IUmbracoBuilder EnsureIndicesOnStartup(this IUmbracoBuilder builder)
     {
-        return builder.AddNotificationHandler<UmbracoApplicationStartingNotification, EnsureIndicesNotificationHandler>();
+        return builder.AddNotificationAsyncHandler<UmbracoApplicationStartingNotification, EnsureIndicesNotificationHandler>();
     }
     
     

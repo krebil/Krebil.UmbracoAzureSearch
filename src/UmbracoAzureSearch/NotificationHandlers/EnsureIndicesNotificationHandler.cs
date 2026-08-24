@@ -6,14 +6,13 @@ namespace UmbracoAzureSearch.NotificationHandlers;
 
 /// <inheritdoc />
 public class EnsureIndicesNotificationHandler(
-    IAzureSearchIndexManager azureSearchIndexManager) : INotificationHandler<UmbracoApplicationStartingNotification>
+    IAzureSearchIndexManager azureSearchIndexManager) : INotificationAsyncHandler<UmbracoApplicationStartingNotification>
 {
     /// <inheritdoc />
-    public void Handle(UmbracoApplicationStartingNotification notification)
-    {
-        azureSearchIndexManager.EnsureAsync((Umbraco.Cms.Search.Core.Constants.IndexAliases.PublishedContent));
-        azureSearchIndexManager.EnsureAsync((Umbraco.Cms.Search.Core.Constants.IndexAliases.DraftContent));
-        azureSearchIndexManager.EnsureAsync((Umbraco.Cms.Search.Core.Constants.IndexAliases.DraftMedia));
-        azureSearchIndexManager.EnsureAsync((Umbraco.Cms.Search.Core.Constants.IndexAliases.DraftMembers));
-    } 
+    public Task HandleAsync(UmbracoApplicationStartingNotification notification, CancellationToken cancellationToken)
+        => Task.WhenAll(
+            azureSearchIndexManager.EnsureAsync(Umbraco.Cms.Search.Core.Constants.IndexAliases.PublishedContent),
+            azureSearchIndexManager.EnsureAsync(Umbraco.Cms.Search.Core.Constants.IndexAliases.DraftContent),
+            azureSearchIndexManager.EnsureAsync(Umbraco.Cms.Search.Core.Constants.IndexAliases.DraftMedia),
+            azureSearchIndexManager.EnsureAsync(Umbraco.Cms.Search.Core.Constants.IndexAliases.DraftMembers));
 }
