@@ -11,7 +11,9 @@ using UmbracoAzureSearch.Services.Factory;
 
 namespace UmbracoAzureSearch.Tests;
 
+// Integration tests need a live Azure AI Search service, so CI excludes this category.
 [TestFixture]
+[Category("Integration")]
 public abstract class AzureSearchTestBase
 {
     private IServiceProvider _serviceProvider;
