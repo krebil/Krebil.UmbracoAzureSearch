@@ -4,6 +4,7 @@ using Azure.Search.Documents.Models;
 using Umbraco.Cms.Core;
 using Umbraco.Cms.Core.Models;
 using Umbraco.Cms.Core.Sync;
+using Umbraco.Cms.Search.Core.Extensions;
 using Umbraco.Cms.Search.Core.Models.Searching;
 using Umbraco.Cms.Search.Core.Models.Searching.Faceting;
 using Umbraco.Cms.Search.Core.Models.Searching.Filtering;
@@ -23,6 +24,8 @@ public class AzureSearchSearcher(
     IAzureSearchClientFactory azureSearchClientFactory)
     : UmbracoAzureServiceBase(serverRoleAccessor), IAzureSearchSearcher
 {
+    private const int MaxOrderByClauses = 32;
+
     public Task<SearchResult> SearchAsync(
         string indexAlias,
         string? query = null,
@@ -81,13 +84,10 @@ public class AzureSearchSearcher(
             SearchMode = searchMode
         };
 
-        // Build the search query
-        // No query AND no filters AND no facets AND no sorters = no results;
-        // for single-word queries, append * for prefix matching
-        var hasFilters = filters?.Any() == true;
-        var hasFacets = facets?.Any() == true;
-        var hasSorters = sorters?.Any() == true;
-        if (string.IsNullOrWhiteSpace(query) && !hasFilters && !hasFacets && !hasSorters)
+        // Only a search without any criteria finds nothing, as in the Examine provider; otherwise no query matches all.
+        // For single-word queries, append * for prefix matching
+        if (query is null && filters is null && facets is null && sorters is null
+            && culture is null && segment is null && accessContext is null)
         {
             return new SearchResult(0, [], []);
         }
@@ -96,12 +96,14 @@ public class AzureSearchSearcher(
             : query.Contains(' ') ? query : $"{query}*";
 
         // Build base filter clauses (culture/segment)
+        // Escaped like every other value: an unescaped quote could end the clause and turn the whole filter, the
+        // access clause included, into something that matches everything.
         var baseFilterClauses = new List<string>();
 
         // Culture filter
         if (!string.IsNullOrWhiteSpace(culture))
         {
-            var cultureValue = culture.IndexCulture();
+            var cultureValue = EscapeODataString(culture.IndexCulture());
             baseFilterClauses.Add(
                 $"({IndexConstants.FieldNames.Culture} eq '{cultureValue}' or {IndexConstants.FieldNames.Culture} eq '{IndexConstants.Variation.InvariantCulture}')");
         }
@@ -113,13 +115,19 @@ public class AzureSearchSearcher(
         // Segment filter
         if (!string.IsNullOrWhiteSpace(segment))
         {
-            var segmentValue = segment.IndexSegment();
+            var segmentValue = EscapeODataString(segment.IndexSegment());
             baseFilterClauses.Add(
                 $"({IndexConstants.FieldNames.Segment} eq '{segmentValue}' or {IndexConstants.FieldNames.Segment} eq '{IndexConstants.Variation.DefaultSegment}')");
         }
         else
         {
             baseFilterClauses.Add($"{IndexConstants.FieldNames.Segment} eq '{IndexConstants.Variation.DefaultSegment}'");
+        }
+
+        var accessClause = BuildAccessClause(accessContext);
+        if (accessClause is not null)
+        {
+            baseFilterClauses.Add(accessClause);
         }
 
         // Split user filters into regular filters and same-field-as-facet filters
@@ -158,7 +166,8 @@ public class AzureSearchSearcher(
             effectiveSorters = [new ScoreSorter(Direction.Descending)];
         }
 
-        foreach (var sorter in effectiveSorters)
+        // Azure allows 32 $orderby clauses; the last one is the tie-breaker below.
+        foreach (var sorter in effectiveSorters.Take(MaxOrderByClauses - 1))
         {
             var sortClause = BuildSortClause(sorter);
             if (!string.IsNullOrEmpty(sortClause))
@@ -166,6 +175,9 @@ public class AzureSearchSearcher(
                 searchOptions.OrderBy.Add(sortClause);
             }
         }
+
+        // Ties (every score is equal for "*") come back in no fixed order, which breaks skip/take paging.
+        searchOptions.OrderBy.Add($"{IndexConstants.FieldNames.Id} asc");
 
         // Facets - deduplicate by field key and separate into same-field and different-field groups
         // NOTE: Azure Search does not allow multiple facet types on the same field in a single query
@@ -203,8 +215,6 @@ public class AzureSearchSearcher(
         {
             searchOptions.Facets.Add(expr);
         }
-
-        // TODO: Add support for access context
 
         if (filterClauses.Any())
         {
@@ -274,6 +284,23 @@ public class AzureSearchSearcher(
         return new SearchResult(result.Value.TotalCount ?? 0, documents.ToArray(), facetResults.ToArray());
     }
 
+    // Mirrors the Examine provider: without a member only unprotected documents (Guid.Empty) match.
+    private static string? BuildAccessClause(AccessContext? accessContext)
+    {
+        if (accessContext?.Bypass is true)
+            return null;
+
+        var accessKeys = new List<Guid> { Guid.Empty };
+        if (accessContext is not null && accessContext.PrincipalId != Guid.Empty)
+        {
+            accessKeys.Add(accessContext.PrincipalId);
+            accessKeys.AddRange(accessContext.GroupIds ?? []);
+        }
+
+        var values = string.Join(",", accessKeys.Distinct().Select(key => key.AsKeyword()));
+        return $"{IndexConstants.FieldNames.AccessKeys}/any(k: search.in(k, '{values}', ','))";
+    }
+
     private static string BuildFilterClause(Filter filter)
     {
         return filter switch
@@ -301,8 +328,15 @@ public class AzureSearchSearcher(
     private static string BuildDecimalExactFilter(DecimalExactFilter filter)
     {
         var fieldName = $"{filter.FieldName}{IndexConstants.FieldTypePostfix.Decimals}";
-        return BuildNumericExactFilter(fieldName, filter.Values.Select(v => FormattableString.Invariant($"{v}")),
-            filter.Negate);
+        return BuildNumericExactFilter(fieldName, filter.Values.Select(DecimalLiteral), filter.Negate);
+    }
+
+    // Decimals are stored as Edm.Double: written without a decimal point, a value beyond Int64 is an integer literal
+    // Azure rejects.
+    private static string DecimalLiteral(decimal value)
+    {
+        var literal = value.ToString(CultureInfo.InvariantCulture);
+        return literal.Contains('.') ? literal : $"{literal}.0";
     }
 
     private static string BuildNumericExactFilter(string fieldName, IEnumerable<string> rawValues, bool negate)
@@ -346,9 +380,24 @@ public class AzureSearchSearcher(
             return string.Empty;
 
         var fieldName = $"{filter.FieldName}{IndexConstants.FieldTypePostfix.Integers}";
-        var clause = string.Join(" or ", rangeList.Select(r =>
-            $"{fieldName}/any(f: f ge {r.MinValue} and f lt {r.MaxValue})"));
+        var clause = string.Join(" or ", rangeList.Select(r => BuildRangeClause(fieldName,
+            r.MinValue?.ToString(CultureInfo.InvariantCulture),
+            r.MaxValue?.ToString(CultureInfo.InvariantCulture))));
         return filter.Negate ? $"not ({clause})" : $"({clause})";
+    }
+
+    // Min is inclusive and max exclusive, as in the Examine provider; a null bound leaves that side open.
+    private static string BuildRangeClause(string fieldName, string? minValue, string? maxValue)
+    {
+        var bounds = new List<string>(2);
+        if (minValue is not null)
+            bounds.Add($"f ge {minValue}");
+        if (maxValue is not null)
+            bounds.Add($"f lt {maxValue}");
+
+        return bounds.Count == 0
+            ? $"{fieldName}/any()"
+            : $"{fieldName}/any(f: {string.Join(" and ", bounds)})";
     }
 
     private static string BuildDecimalRangeFilter(DecimalRangeFilter filter)
@@ -358,12 +407,9 @@ public class AzureSearchSearcher(
             return string.Empty;
 
         var fieldName = $"{filter.FieldName}{IndexConstants.FieldTypePostfix.Decimals}";
-        var clause = string.Join(" or ", rangeList.Select(r =>
-        {
-            var minStr = FormattableString.Invariant($"{r.MinValue}");
-            var maxStr = FormattableString.Invariant($"{r.MaxValue}");
-            return $"{fieldName}/any(f: f ge {minStr} and f lt {maxStr})";
-        }));
+        var clause = string.Join(" or ", rangeList.Select(r => BuildRangeClause(fieldName,
+            r.MinValue is { } min ? DecimalLiteral(min) : null,
+            r.MaxValue is { } max ? DecimalLiteral(max) : null)));
         return filter.Negate ? $"not ({clause})" : $"({clause})";
     }
 
@@ -381,10 +427,14 @@ public class AzureSearchSearcher(
 
     private static string BuildDateTimeOffsetRangeFilter(DateTimeOffsetRangeFilter filter)
     {
+        var rangeList = filter.Ranges.ToArray();
+        if (rangeList.Length == 0)
+            return string.Empty;
+
         var fieldName = $"{filter.FieldName}{IndexConstants.FieldTypePostfix.DateTimeOffsets}";
-        var ranges = filter.Ranges.Select(r =>
-            $"{fieldName}/any(f: f ge {r.MinValue:O} and f lt {r.MaxValue:O})");
-        var clause = string.Join(" or ", ranges);
+        var clause = string.Join(" or ", rangeList.Select(r => BuildRangeClause(fieldName,
+            r.MinValue?.ToString("O", CultureInfo.InvariantCulture),
+            r.MaxValue?.ToString("O", CultureInfo.InvariantCulture))));
 
         return filter.Negate ? $"not ({clause})" : $"({clause})";
     }

@@ -43,7 +43,8 @@ public class AzureSearchIndexManager(
         var newIndex = new SearchIndex(indexAlias, [
             new SearchField(IndexConstants.FieldNames.Id,  SearchFieldDataType.String)
             {
-                IsKey = true
+                IsKey = true,
+                IsSortable = true
             },
             new SearchField(IndexConstants.FieldNames.Key, SearchFieldDataType.String)
             {
@@ -111,6 +112,8 @@ public class AzureSearchIndexManager(
 
     public async Task ResetAsync(string indexAlias)
     {
+        if (ShouldNotManipulateIndexes())
+            return;
         var indexClient = azureSearchClientFactory.GetSearchIndexClient();
         indexAlias = indexAliasResolver.Resolve(indexAlias);
         var index = await indexClient.GetIndexAsync(indexAlias);
