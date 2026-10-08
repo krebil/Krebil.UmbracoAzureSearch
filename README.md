@@ -48,6 +48,8 @@ public sealed class SearchComposer : IComposer
 }
 ```
 
+`AddUmbracoAzureSearch` registers the four default Umbraco Search indexes (`Umb_Content`, `Umb_PublishedContent`, `Umb_Media` and `Umb_Members`) against Azure AI Search. To change one of them or add your own, configure `IndexOptions` after this call; the last registration for an alias wins.
+
 ## Usage
 
 Inject `IAzureSearchSearcher` (or `ISearcherResolver` to resolve it by index alias) and call `SearchAsync`. See the [Umbraco Search documentation](https://github.com/umbraco/Umbraco.Cms.Search/blob/main/docs/searching.md) for the full API: filtering, faceting, sorting, pagination, culture/segment variants, and protected content all work the same way.
