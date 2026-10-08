@@ -12,7 +12,7 @@ public class AzureSearchSearcherRangeFilterTests
     {
         var filter = await SearchWith(DecimalRangeFilter.Single("price", 1.5m, 10m, false));
 
-        Assert.That(filter, Does.Contain("(price_decimals/any(f: f ge 1.5 and f lt 10))"));
+        Assert.That(filter, Does.Contain("(price_decimals/any(f: f ge 1.5 and f lt 10.0))"));
     }
 
     [Test]

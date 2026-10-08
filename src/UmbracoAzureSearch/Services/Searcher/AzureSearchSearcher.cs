@@ -24,6 +24,8 @@ public class AzureSearchSearcher(
     IAzureSearchClientFactory azureSearchClientFactory)
     : UmbracoAzureServiceBase(serverRoleAccessor), IAzureSearchSearcher
 {
+    private const int MaxOrderByClauses = 32;
+
     public Task<SearchResult> SearchAsync(
         string indexAlias,
         string? query = null,
@@ -94,12 +96,14 @@ public class AzureSearchSearcher(
             : query.Contains(' ') ? query : $"{query}*";
 
         // Build base filter clauses (culture/segment)
+        // Escaped like every other value: an unescaped quote could end the clause and turn the whole filter, the
+        // access clause included, into something that matches everything.
         var baseFilterClauses = new List<string>();
 
         // Culture filter
         if (!string.IsNullOrWhiteSpace(culture))
         {
-            var cultureValue = culture.IndexCulture();
+            var cultureValue = EscapeODataString(culture.IndexCulture());
             baseFilterClauses.Add(
                 $"({IndexConstants.FieldNames.Culture} eq '{cultureValue}' or {IndexConstants.FieldNames.Culture} eq '{IndexConstants.Variation.InvariantCulture}')");
         }
@@ -111,7 +115,7 @@ public class AzureSearchSearcher(
         // Segment filter
         if (!string.IsNullOrWhiteSpace(segment))
         {
-            var segmentValue = segment.IndexSegment();
+            var segmentValue = EscapeODataString(segment.IndexSegment());
             baseFilterClauses.Add(
                 $"({IndexConstants.FieldNames.Segment} eq '{segmentValue}' or {IndexConstants.FieldNames.Segment} eq '{IndexConstants.Variation.DefaultSegment}')");
         }
@@ -162,7 +166,8 @@ public class AzureSearchSearcher(
             effectiveSorters = [new ScoreSorter(Direction.Descending)];
         }
 
-        foreach (var sorter in effectiveSorters)
+        // Azure allows 32 $orderby clauses; the last one is the tie-breaker below.
+        foreach (var sorter in effectiveSorters.Take(MaxOrderByClauses - 1))
         {
             var sortClause = BuildSortClause(sorter);
             if (!string.IsNullOrEmpty(sortClause))
@@ -323,8 +328,15 @@ public class AzureSearchSearcher(
     private static string BuildDecimalExactFilter(DecimalExactFilter filter)
     {
         var fieldName = $"{filter.FieldName}{IndexConstants.FieldTypePostfix.Decimals}";
-        return BuildNumericExactFilter(fieldName, filter.Values.Select(v => FormattableString.Invariant($"{v}")),
-            filter.Negate);
+        return BuildNumericExactFilter(fieldName, filter.Values.Select(DecimalLiteral), filter.Negate);
+    }
+
+    // Decimals are stored as Edm.Double: written without a decimal point, a value beyond Int64 is an integer literal
+    // Azure rejects.
+    private static string DecimalLiteral(decimal value)
+    {
+        var literal = value.ToString(CultureInfo.InvariantCulture);
+        return literal.Contains('.') ? literal : $"{literal}.0";
     }
 
     private static string BuildNumericExactFilter(string fieldName, IEnumerable<string> rawValues, bool negate)
@@ -396,8 +408,8 @@ public class AzureSearchSearcher(
 
         var fieldName = $"{filter.FieldName}{IndexConstants.FieldTypePostfix.Decimals}";
         var clause = string.Join(" or ", rangeList.Select(r => BuildRangeClause(fieldName,
-            r.MinValue?.ToString(CultureInfo.InvariantCulture),
-            r.MaxValue?.ToString(CultureInfo.InvariantCulture))));
+            r.MinValue is { } min ? DecimalLiteral(min) : null,
+            r.MaxValue is { } max ? DecimalLiteral(max) : null)));
         return filter.Negate ? $"not ({clause})" : $"({clause})";
     }
 
