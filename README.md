@@ -33,6 +33,16 @@ Add your Azure AI Search credentials to `appsettings.json`:
 }
 ```
 
+### Microsoft Entra ID (managed identity)
+
+To authenticate without an API key, pass a `TokenCredential` when registering and leave `Key` out of the configuration:
+
+```csharp
+builder.Services.AddUmbracoAzureSearch(builder.Config, new DefaultAzureCredential());
+```
+
+`DefaultAzureCredential` comes from the `Azure.Identity` package. The search service's API access control must allow role-based access, and the identity needs the **Search Service Contributor** role (to create indexes) and the **Search Index Data Contributor** role (to index and query). A credential passed in code takes precedence over a configured `Key`.
+
 ## Registration
 
 Register the services via a composer:
