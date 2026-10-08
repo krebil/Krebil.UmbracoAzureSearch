@@ -4,6 +4,7 @@ using Azure.Search.Documents.Models;
 using Umbraco.Cms.Core;
 using Umbraco.Cms.Core.Models;
 using Umbraco.Cms.Core.Sync;
+using Umbraco.Cms.Search.Core.Extensions;
 using Umbraco.Cms.Search.Core.Models.Searching;
 using Umbraco.Cms.Search.Core.Models.Searching.Faceting;
 using Umbraco.Cms.Search.Core.Models.Searching.Filtering;
@@ -122,6 +123,12 @@ public class AzureSearchSearcher(
             baseFilterClauses.Add($"{IndexConstants.FieldNames.Segment} eq '{IndexConstants.Variation.DefaultSegment}'");
         }
 
+        var accessClause = BuildAccessClause(accessContext);
+        if (accessClause is not null)
+        {
+            baseFilterClauses.Add(accessClause);
+        }
+
         // Split user filters into regular filters and same-field-as-facet filters
         var filtersArray = filters?.ToArray() ?? [];
         var facetsList = facets?.ToList() ?? [];
@@ -204,8 +211,6 @@ public class AzureSearchSearcher(
             searchOptions.Facets.Add(expr);
         }
 
-        // TODO: Add support for access context
-
         if (filterClauses.Any())
         {
             searchOptions.Filter = string.Join(" and ", filterClauses);
@@ -272,6 +277,23 @@ public class AzureSearchSearcher(
         var facetResults = ParseFacetResults(facetResultsData, facetFieldMap);
 
         return new SearchResult(result.Value.TotalCount ?? 0, documents.ToArray(), facetResults.ToArray());
+    }
+
+    // Mirrors the Examine provider: without a member only unprotected documents (Guid.Empty) match.
+    private static string? BuildAccessClause(AccessContext? accessContext)
+    {
+        if (accessContext?.Bypass is true)
+            return null;
+
+        var accessKeys = new List<Guid> { Guid.Empty };
+        if (accessContext is not null && accessContext.PrincipalId != Guid.Empty)
+        {
+            accessKeys.Add(accessContext.PrincipalId);
+            accessKeys.AddRange(accessContext.GroupIds ?? []);
+        }
+
+        var values = string.Join(",", accessKeys.Distinct().Select(key => key.AsKeyword()));
+        return $"{IndexConstants.FieldNames.AccessKeys}/any(k: search.in(k, '{values}', ','))";
     }
 
     private static string BuildFilterClause(Filter filter)
