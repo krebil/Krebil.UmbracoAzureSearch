@@ -346,9 +346,24 @@ public class AzureSearchSearcher(
             return string.Empty;
 
         var fieldName = $"{filter.FieldName}{IndexConstants.FieldTypePostfix.Integers}";
-        var clause = string.Join(" or ", rangeList.Select(r =>
-            $"{fieldName}/any(f: f ge {r.MinValue} and f lt {r.MaxValue})"));
+        var clause = string.Join(" or ", rangeList.Select(r => BuildRangeClause(fieldName,
+            r.MinValue?.ToString(CultureInfo.InvariantCulture),
+            r.MaxValue?.ToString(CultureInfo.InvariantCulture))));
         return filter.Negate ? $"not ({clause})" : $"({clause})";
+    }
+
+    // Min is inclusive and max exclusive, as in the Examine provider; a null bound leaves that side open.
+    private static string BuildRangeClause(string fieldName, string? minValue, string? maxValue)
+    {
+        var bounds = new List<string>(2);
+        if (minValue is not null)
+            bounds.Add($"f ge {minValue}");
+        if (maxValue is not null)
+            bounds.Add($"f lt {maxValue}");
+
+        return bounds.Count == 0
+            ? $"{fieldName}/any()"
+            : $"{fieldName}/any(f: {string.Join(" and ", bounds)})";
     }
 
     private static string BuildDecimalRangeFilter(DecimalRangeFilter filter)
@@ -358,12 +373,9 @@ public class AzureSearchSearcher(
             return string.Empty;
 
         var fieldName = $"{filter.FieldName}{IndexConstants.FieldTypePostfix.Decimals}";
-        var clause = string.Join(" or ", rangeList.Select(r =>
-        {
-            var minStr = FormattableString.Invariant($"{r.MinValue}");
-            var maxStr = FormattableString.Invariant($"{r.MaxValue}");
-            return $"{fieldName}/any(f: f ge {minStr} and f lt {maxStr})";
-        }));
+        var clause = string.Join(" or ", rangeList.Select(r => BuildRangeClause(fieldName,
+            r.MinValue?.ToString(CultureInfo.InvariantCulture),
+            r.MaxValue?.ToString(CultureInfo.InvariantCulture))));
         return filter.Negate ? $"not ({clause})" : $"({clause})";
     }
 
@@ -381,10 +393,14 @@ public class AzureSearchSearcher(
 
     private static string BuildDateTimeOffsetRangeFilter(DateTimeOffsetRangeFilter filter)
     {
+        var rangeList = filter.Ranges.ToArray();
+        if (rangeList.Length == 0)
+            return string.Empty;
+
         var fieldName = $"{filter.FieldName}{IndexConstants.FieldTypePostfix.DateTimeOffsets}";
-        var ranges = filter.Ranges.Select(r =>
-            $"{fieldName}/any(f: f ge {r.MinValue:O} and f lt {r.MaxValue:O})");
-        var clause = string.Join(" or ", ranges);
+        var clause = string.Join(" or ", rangeList.Select(r => BuildRangeClause(fieldName,
+            r.MinValue?.ToString("O", CultureInfo.InvariantCulture),
+            r.MaxValue?.ToString("O", CultureInfo.InvariantCulture))));
 
         return filter.Negate ? $"not ({clause})" : $"({clause})";
     }
