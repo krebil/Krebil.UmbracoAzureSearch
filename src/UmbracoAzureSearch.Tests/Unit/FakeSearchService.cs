@@ -11,12 +11,12 @@ using UmbracoAzureSearch.Services.Searcher;
 
 namespace UmbracoAzureSearch.Tests.Unit;
 
-// Answers every Azure AI Search call with an empty result and records the requests.
+// Answers Azure AI Search calls with an empty index or result and records the requests.
 internal sealed class FakeSearchService : HttpMessageHandler
 {
     public List<(HttpMethod Method, string Path, string? Body)> Requests { get; } = [];
 
-    public AzureSearchClientFactory CreateFactory()
+    public IServiceProvider CreateServices(ServerRole serverRole = ServerRole.Single)
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -26,16 +26,18 @@ internal sealed class FakeSearchService : HttpMessageHandler
             })
             .Build();
 
-        var factory = (AzureSearchClientFactory)new ServiceCollection()
+        var services = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton<IServerRoleAccessor>(new FixedServerRoleAccessor(serverRole))
             .AddUmbracoAzureSearch(configuration)
-            .BuildServiceProvider()
-            .GetRequiredService<IAzureSearchClientFactory>();
-        factory.Transport = new HttpClientTransport(new HttpClient(this));
-        return factory;
+            .BuildServiceProvider();
+        ((AzureSearchClientFactory)services.GetRequiredService<IAzureSearchClientFactory>()).Transport =
+            new HttpClientTransport(new HttpClient(this));
+        return services;
     }
 
-    public AzureSearchSearcher CreateSearcher(ServerRole serverRole = ServerRole.Single)
-        => new(new FixedServerRoleAccessor(serverRole), CreateFactory());
+    public IAzureSearchSearcher CreateSearcher(ServerRole serverRole = ServerRole.Single)
+        => CreateServices(serverRole).GetRequiredService<IAzureSearchSearcher>();
 
     public JsonElement LastSearchBody()
     {
@@ -55,9 +57,18 @@ internal sealed class FakeSearchService : HttpMessageHandler
         var body = request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken);
         Requests.Add((request.Method, request.RequestUri!.AbsolutePath, body));
 
-        return new HttpResponseMessage(HttpStatusCode.OK)
+        if (request.Method == HttpMethod.Delete)
+            return new HttpResponseMessage(HttpStatusCode.NoContent);
+
+        var json = request.RequestUri.AbsolutePath.Contains("/docs/")
+            ? """{"@odata.count":0,"value":[]}"""
+            : """{"name":"unit-test-index","fields":[{"name":"id","type":"Edm.String","key":true}]}""";
+        var status = request.Method == HttpMethod.Post && !request.RequestUri.AbsolutePath.Contains("/docs/")
+            ? HttpStatusCode.Created
+            : HttpStatusCode.OK;
+        return new HttpResponseMessage(status)
         {
-            Content = new StringContent("""{"@odata.count":0,"value":[]}""", Encoding.UTF8, "application/json")
+            Content = new StringContent(json, Encoding.UTF8, "application/json")
         };
     }
 
