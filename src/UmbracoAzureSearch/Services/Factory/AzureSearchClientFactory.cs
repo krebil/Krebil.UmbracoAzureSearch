@@ -1,5 +1,6 @@
 using Azure;
 using Azure.Core;
+using Azure.Core.Pipeline;
 using Azure.Search.Documents;
 using Azure.Search.Documents.Indexes;
 using Microsoft.Extensions.Options;
@@ -9,32 +10,22 @@ using UmbracoAzureSearch.Services.IndexAliasResolver;
 
 namespace UmbracoAzureSearch.Services.Factory;
 
-public class AzureSearchClientFactory : IAzureSearchClientFactory
+public class AzureSearchClientFactory(
+    IOptions<UmbracoAzureSearchOptions> azureSearchOptions,
+    IIndexAliasResolver indexAliasResolver,
+    TokenCredential? tokenCredential = null)
+    : IAzureSearchClientFactory
 {
-    private readonly UmbracoAzureSearchOptions _azureSearchOptions;
-    private readonly IIndexAliasResolver _indexAliasResolver;
-    private readonly TokenCredential? _tokenCredential;
+    private readonly UmbracoAzureSearchOptions _azureSearchOptions = azureSearchOptions.Value;
 
     // One client for the factory's lifetime: it is thread-safe, and its pipeline caches the access token.
-    private readonly Lazy<SearchIndexClient> _searchIndexClient;
+    private SearchIndexClient? _searchIndexClient;
 
-    public AzureSearchClientFactory(IOptions<UmbracoAzureSearchOptions> azureSearchOptions, IIndexAliasResolver indexAliasResolver)
-        : this(azureSearchOptions, indexAliasResolver, null)
-    {
-    }
+    // Lets tests inspect requests without a network.
+    internal HttpPipelineTransport? Transport { get; set; }
 
-    internal AzureSearchClientFactory(
-        IOptions<UmbracoAzureSearchOptions> azureSearchOptions,
-        IIndexAliasResolver indexAliasResolver,
-        TokenCredential? tokenCredential)
-    {
-        _azureSearchOptions = azureSearchOptions.Value;
-        _indexAliasResolver = indexAliasResolver;
-        _tokenCredential = tokenCredential;
-        _searchIndexClient = new Lazy<SearchIndexClient>(CreateSearchIndexClient);
-    }
-
-    public SearchIndexClient GetSearchIndexClient() => _searchIndexClient.Value;
+    public SearchIndexClient GetSearchIndexClient()
+        => LazyInitializer.EnsureInitialized(ref _searchIndexClient, CreateSearchIndexClient);
 
     private SearchIndexClient CreateSearchIndexClient()
     {
@@ -47,24 +38,28 @@ public class AzureSearchClientFactory : IAzureSearchClientFactory
             ? new SearchClientOptions(SearchClientOptions.ServiceVersion.V2026_05_01_Preview)
             : new SearchClientOptions();
 
+        if (Transport is not null)
+        {
+            options.Transport = Transport;
+        }
+
         // A credential passed in code wins over a configured key.
-        if (_tokenCredential is not null)
+        if (tokenCredential is not null)
         {
-            return new SearchIndexClient(endpoint, _tokenCredential, options);
+            return new SearchIndexClient(endpoint, tokenCredential, options);
         }
 
-        if (string.IsNullOrWhiteSpace(_azureSearchOptions.Key))
-        {
-            throw new InvalidOperationException(
-                $"Azure AI Search needs either {UmbracoAzureSearchOptions.Name}:Key or a TokenCredential passed to AddUmbracoAzureSearch.");
-        }
+        string key = _azureSearchOptions.Key
+            .ThrowIfNull(() => new InvalidOperationException(
+                $"Azure AI Search needs either {UmbracoAzureSearchOptions.Name}:Key or a TokenCredential passed to AddUmbracoAzureSearch."))
+            .IfWhiteSpace();
 
-        return new SearchIndexClient(endpoint, new AzureKeyCredential(_azureSearchOptions.Key), options);
+        return new SearchIndexClient(endpoint, new AzureKeyCredential(key), options);
     }
 
     public SearchClient GetSearchClient(string indexAlias)
     {
-        indexAlias = _indexAliasResolver.Resolve(indexAlias);
+        indexAlias = indexAliasResolver.Resolve(indexAlias);
         var indexClient = GetSearchIndexClient();
         return indexClient.GetSearchClient(indexAlias);
     }
