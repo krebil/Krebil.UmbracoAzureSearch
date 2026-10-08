@@ -7,7 +7,7 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <Version>17.1.0</Version>
+    <Version>17.2.0</Version>
     <PackageId>Krebil.UmbracoAzureSearch</PackageId>
     <Product>Krebil.UmbracoAzureSearch</Product>
     <Title>Azure AI Search Provider for Umbraco.Search</Title>
