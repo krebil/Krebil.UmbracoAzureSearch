@@ -1,0 +1,20 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main, v17]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: Setup .NET SDK
+      uses: actions/setup-dotnet@v4
+    # Integration tests require live Azure AI Search and Elasticsearch instances.
+    # Run them locally before releasing.
+    - name: Test
+      run: dotnet test src/UmbracoAzureSearch.sln --filter "TestCategory!=Integration"
