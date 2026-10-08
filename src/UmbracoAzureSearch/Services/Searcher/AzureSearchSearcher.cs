@@ -82,13 +82,10 @@ public class AzureSearchSearcher(
             SearchMode = searchMode
         };
 
-        // Build the search query
-        // No query AND no filters AND no facets AND no sorters = no results;
-        // for single-word queries, append * for prefix matching
-        var hasFilters = filters?.Any() == true;
-        var hasFacets = facets?.Any() == true;
-        var hasSorters = sorters?.Any() == true;
-        if (string.IsNullOrWhiteSpace(query) && !hasFilters && !hasFacets && !hasSorters)
+        // Only a search without any criteria finds nothing, as in the Examine provider; otherwise no query matches all.
+        // For single-word queries, append * for prefix matching
+        if (query is null && filters is null && facets is null && sorters is null
+            && culture is null && segment is null && accessContext is null)
         {
             return new SearchResult(0, [], []);
         }
@@ -173,6 +170,9 @@ public class AzureSearchSearcher(
                 searchOptions.OrderBy.Add(sortClause);
             }
         }
+
+        // Ties (every score is equal for "*") come back in no fixed order, which breaks skip/take paging.
+        searchOptions.OrderBy.Add($"{IndexConstants.FieldNames.Id} asc");
 
         // Facets - deduplicate by field key and separate into same-field and different-field groups
         // NOTE: Azure Search does not allow multiple facet types on the same field in a single query
