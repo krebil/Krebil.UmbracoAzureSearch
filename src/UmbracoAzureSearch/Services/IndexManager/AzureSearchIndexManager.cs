@@ -111,6 +111,8 @@ public class AzureSearchIndexManager(
 
     public async Task ResetAsync(string indexAlias)
     {
+        if (ShouldNotManipulateIndexes())
+            return;
         var indexClient = azureSearchClientFactory.GetSearchIndexClient();
         indexAlias = indexAliasResolver.Resolve(indexAlias);
         var index = await indexClient.GetIndexAsync(indexAlias);
