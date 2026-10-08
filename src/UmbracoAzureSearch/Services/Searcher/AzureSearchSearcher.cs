@@ -59,6 +59,12 @@ public class AzureSearchSearcher(
         => SearchCoreAsync(indexAlias, query, filters, facets, sorters, culture, segment,
             accessContext, skip, take, SearchQueryType.Simple, SearchMode.All);
 
+    // Azure has no field for a value no document ever had, where Examine has a field with no values. A clause on one is
+    // a 400 naming the field; the search is repeated without it, answered as Examine would: a filter on it finds nothing
+    // (everything, negated), a sort or facet on it is dropped.
+    private static readonly System.Text.RegularExpressions.Regex UnknownFieldPattern =
+        new("Could not find a property named '([^']+)'", System.Text.RegularExpressions.RegexOptions.Compiled);
+
     private async Task<SearchResult> SearchCoreAsync(
         string indexAlias,
         string? query,
@@ -72,6 +78,39 @@ public class AzureSearchSearcher(
         int take,
         SearchQueryType queryType,
         SearchMode searchMode)
+    {
+        var unknownFields = new HashSet<string>();
+        while (true)
+        {
+            try
+            {
+                return await SearchOnceAsync(indexAlias, query, filters, facets, sorters, culture, segment, accessContext,
+                    skip, take, queryType, searchMode, unknownFields);
+            }
+            catch (Azure.RequestFailedException ex) when (ex.Status == 400
+                && UnknownFieldPattern.Match(ex.Message) is { Success: true } match
+                && unknownFields.Add(match.Groups[1].Value))
+            {
+                // Repeated without the field. An error about a field the search did not ask for comes back unchanged
+                // the second time and is not swallowed.
+            }
+        }
+    }
+
+    private async Task<SearchResult> SearchOnceAsync(
+        string indexAlias,
+        string? query,
+        IEnumerable<Filter>? filters,
+        IEnumerable<Facet>? facets,
+        IEnumerable<Sorter>? sorters,
+        string? culture,
+        string? segment,
+        AccessContext? accessContext,
+        int skip,
+        int take,
+        SearchQueryType queryType,
+        SearchMode searchMode,
+        ISet<string> unknownFields)
     {
         var searchClient = azureSearchClientFactory.GetSearchClient(indexAlias);
 
@@ -130,9 +169,16 @@ public class AzureSearchSearcher(
             baseFilterClauses.Add(accessClause);
         }
 
-        // Split user filters into regular filters and same-field-as-facet filters
         var filtersArray = filters?.ToArray() ?? [];
-        var facetsList = facets?.ToList() ?? [];
+        if (filtersArray.Any(f => !f.Negate && FilterFields(f).Any(unknownFields.Contains)))
+        {
+            return new SearchResult(0, [], []);
+        }
+
+        filtersArray = filtersArray.Where(f => !FilterFields(f).Any(unknownFields.Contains)).ToArray();
+        var facetsList = (facets ?? []).Where(f => !unknownFields.Contains(BuildFacetExpression(f).FieldKey)).ToList();
+
+        // Split user filters into regular filters and same-field-as-facet filters
         var facetFieldNames = facetsList.Select(f => f.FieldName).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var sameFieldFilters = filtersArray.Where(f => facetFieldNames.Contains(f.FieldName)).ToArray();
         var regularFilters = filtersArray.Except(sameFieldFilters).ToArray();
@@ -160,7 +206,7 @@ public class AzureSearchSearcher(
         }
 
         // Sorting - default to score descending when no sorters provided
-        var effectiveSorters = sorters?.ToArray() ?? [];
+        var effectiveSorters = (sorters ?? []).Where(sorter => SortField(sorter) is not { } field || !unknownFields.Contains(field)).ToArray();
         if (effectiveSorters.Length == 0)
         {
             effectiveSorters = [new ScoreSorter(Direction.Descending)];
@@ -300,6 +346,33 @@ public class AzureSearchSearcher(
         var values = string.Join(",", accessKeys.Distinct().Select(key => key.AsKeyword()));
         return $"{IndexConstants.FieldNames.AccessKeys}/any(k: search.in(k, '{values}', ','))";
     }
+
+    // The index fields a filter reads, as the index names them.
+    private static IEnumerable<string> FilterFields(Filter filter) => filter switch
+    {
+        KeywordAnyFilter or KeywordFilter => [$"{filter.FieldName}{IndexConstants.FieldTypePostfix.Keywords}"],
+        IntegerExactFilter or IntegerRangeFilter => [$"{filter.FieldName}{IndexConstants.FieldTypePostfix.Integers}"],
+        DecimalExactFilter or DecimalRangeFilter => [$"{filter.FieldName}{IndexConstants.FieldTypePostfix.Decimals}"],
+        DateTimeOffsetExactFilter or DateTimeOffsetRangeFilter => [$"{filter.FieldName}{IndexConstants.FieldTypePostfix.DateTimeOffsets}"],
+        TextFilter =>
+        [
+            $"{filter.FieldName}{IndexConstants.FieldTypePostfix.Texts}",
+            $"{filter.FieldName}{IndexConstants.FieldTypePostfix.TextsR1}",
+            $"{filter.FieldName}{IndexConstants.FieldTypePostfix.TextsR2}",
+            $"{filter.FieldName}{IndexConstants.FieldTypePostfix.TextsR3}",
+        ],
+        _ => [],
+    };
+
+    private static string? SortField(Sorter sorter) => sorter switch
+    {
+        IntegerSorter s => $"{s.FieldName}{IndexConstants.FieldTypePostfix.Integers}{IndexConstants.FieldTypePostfix.Sortable}",
+        DecimalSorter s => $"{s.FieldName}{IndexConstants.FieldTypePostfix.Decimals}{IndexConstants.FieldTypePostfix.Sortable}",
+        DateTimeOffsetSorter s => $"{s.FieldName}{IndexConstants.FieldTypePostfix.DateTimeOffsets}{IndexConstants.FieldTypePostfix.Sortable}",
+        KeywordSorter s => $"{s.FieldName}{IndexConstants.FieldTypePostfix.Keywords}{IndexConstants.FieldTypePostfix.Sortable}",
+        TextSorter s => $"{s.FieldName}{IndexConstants.FieldTypePostfix.Texts}{IndexConstants.FieldTypePostfix.Sortable}",
+        _ => null,
+    };
 
     private static string BuildFilterClause(Filter filter)
     {
