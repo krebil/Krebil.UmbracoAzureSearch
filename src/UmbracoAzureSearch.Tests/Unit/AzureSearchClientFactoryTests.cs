@@ -1,4 +1,7 @@
+using System.Net;
+using Azure;
 using Azure.Core;
+using Azure.Core.Pipeline;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using UmbracoAzureSearch.Extensions;
@@ -10,21 +13,63 @@ namespace UmbracoAzureSearch.Tests.Unit;
 public class AzureSearchClientFactoryTests
 {
     private const string Endpoint = "https://unit-test.search.windows.net";
+    private const string Key = "test-key";
+    private const string Token = "test-token";
 
     [Test]
-    public void Key_Only_Creates_Client()
+    public void CanAuthenticateWithKey()
     {
-        var factory = CreateFactory(key: "test-key");
+        var handler = new RecordingHandler();
+        var factory = CreateFactory(Key, handler);
 
-        var client = factory.GetSearchIndexClient();
+        SendRequest(factory);
 
-        Assert.That(client.Endpoint, Is.EqualTo(new Uri(Endpoint)));
+        var request = handler.Requests.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(request.Headers.GetValues("api-key"), Is.EqualTo(new[] { Key }));
+            Assert.That(request.Headers.Authorization, Is.Null);
+        });
+    }
+
+    [TestCase(null)]
+    [TestCase(Key)]
+    public void CanAuthenticateWithCredential(string? key)
+    {
+        var handler = new RecordingHandler();
+        var factory = CreateFactory(key, handler, new CountingCredential());
+
+        SendRequest(factory);
+
+        var request = handler.Requests.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(request.Headers.Authorization?.ToString(), Is.EqualTo($"Bearer {Token}"));
+            Assert.That(request.Headers.Contains("api-key"), Is.False);
+        });
     }
 
     [Test]
-    public void Returns_Same_Client_On_Every_Call()
+    public void CanReuseAccessTokenAcrossRequests()
     {
-        var factory = CreateFactory(key: "test-key");
+        var handler = new RecordingHandler();
+        var credential = new CountingCredential();
+        var factory = CreateFactory(null, handler, credential);
+
+        SendRequest(factory);
+        SendRequest(factory);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(handler.Requests, Has.Count.EqualTo(2));
+            Assert.That(credential.TokenRequests, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void CanReuseClient()
+    {
+        var factory = CreateFactory(Key, new RecordingHandler());
 
         var first = factory.GetSearchIndexClient();
         var second = factory.GetSearchIndexClient();
@@ -32,37 +77,26 @@ public class AzureSearchClientFactoryTests
         Assert.That(second, Is.SameAs(first));
     }
 
-    [Test]
-    public void Neither_Key_Nor_Credential_Throws()
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase(" ")]
+    public void CannotCreateClientWithoutKeyOrCredential(string? key)
     {
-        var factory = CreateFactory(key: null);
+        var factory = CreateFactory(key, new RecordingHandler());
 
         var exception = Assert.Throws<InvalidOperationException>(() => factory.GetSearchIndexClient());
         Assert.That(exception!.Message, Does.Contain("UmbracoAzureSearch:Key").And.Contain("TokenCredential"));
     }
 
-    [TestCase(null)]
-    [TestCase("test-key")]
-    public void Credential_Is_Used_For_Requests(string? key)
-    {
-        var credential = new MarkerCredential();
-        var factory = CreateFactory(key, credential);
-
-        // The credential throws before any request leaves the process, so this never reaches the network.
-        Assert.ThrowsAsync<MarkerCredential.TokenRequestedException>(
-            async () => await factory.GetSearchIndexClient().GetServiceStatisticsAsync());
-        Assert.That(credential.TokenRequests, Is.EqualTo(1));
-    }
-
     [Test]
-    public void Null_Credential_Is_Rejected()
+    public void CannotRegisterNullCredential()
     {
         var services = new ServiceCollection();
 
-        Assert.Throws<ArgumentNullException>(() => services.AddUmbracoAzureSearch(BuildConfiguration(key: "test-key"), null!));
+        Assert.Throws<ArgumentNullException>(() => services.AddUmbracoAzureSearch(BuildConfiguration(Key), null!));
     }
 
-    private static IAzureSearchClientFactory CreateFactory(string? key, TokenCredential? credential = null)
+    private static AzureSearchClientFactory CreateFactory(string? key, RecordingHandler handler, TokenCredential? credential = null)
     {
         var services = new ServiceCollection();
         var configuration = BuildConfiguration(key);
@@ -76,7 +110,9 @@ public class AzureSearchClientFactoryTests
             services.AddUmbracoAzureSearch(configuration, credential);
         }
 
-        return services.BuildServiceProvider().GetRequiredService<IAzureSearchClientFactory>();
+        var factory = (AzureSearchClientFactory)services.BuildServiceProvider().GetRequiredService<IAzureSearchClientFactory>();
+        factory.Transport = new HttpClientTransport(new HttpClient(handler));
+        return factory;
     }
 
     private static IConfiguration BuildConfiguration(string? key)
@@ -88,19 +124,33 @@ public class AzureSearchClientFactoryTests
             })
             .Build();
 
-    private sealed class MarkerCredential : TokenCredential
+    // The handler answers 404, so each call ends in a RequestFailedException after the request is recorded.
+    private static void SendRequest(IAzureSearchClientFactory factory)
+        => Assert.ThrowsAsync<RequestFailedException>(
+            async () => await factory.GetSearchIndexClient().GetIndexAsync("missing"));
+
+    private sealed class RecordingHandler : HttpMessageHandler
+    {
+        public List<HttpRequestMessage> Requests { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Requests.Add(request);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+        }
+    }
+
+    private sealed class CountingCredential : TokenCredential
     {
         public int TokenRequests { get; private set; }
 
         public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken)
         {
             TokenRequests++;
-            throw new TokenRequestedException();
+            return new AccessToken(Token, DateTimeOffset.UtcNow.AddHours(1));
         }
 
         public override ValueTask<AccessToken> GetTokenAsync(TokenRequestContext requestContext, CancellationToken cancellationToken)
             => ValueTask.FromResult(GetToken(requestContext, cancellationToken));
-
-        public sealed class TokenRequestedException : Exception;
     }
 }
