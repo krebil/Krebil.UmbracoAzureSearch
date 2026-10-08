@@ -1,8 +1,11 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Umbraco.Cms.Core.DependencyInjection;
+using Umbraco.Cms.Core.Models;
 using Umbraco.Cms.Core.Notifications;
+using Umbraco.Cms.Search.Core.Configuration;
 using Umbraco.Cms.Search.Core.Services;
+using Umbraco.Cms.Search.Core.Services.ContentIndexing;
 using UmbracoAzureSearch.Models;
 using UmbracoAzureSearch.NotificationHandlers;
 using UmbracoAzureSearch.Services.Factory;
@@ -28,7 +31,21 @@ public static class ServiceCollectionExtensions
         
         services.AddSingleton<ISearcher, AzureSearchSearcher>();
         services.AddSingleton<IIndexer, AzureSearchIndexer>();
-        
+
+        // Umbraco Search only indexes and searches aliases that are registered, so register the four default indexes
+        // the way the Examine provider does. A host can still override or add registrations after this call.
+        services.Configure<IndexOptions>(options =>
+        {
+            options.RegisterContentIndex<IAzureSearchIndexer, IAzureSearchSearcher, IDraftContentChangeStrategy>(
+                Umbraco.Cms.Search.Core.Constants.IndexAliases.DraftContent, UmbracoObjectTypes.Document);
+            options.RegisterContentIndex<IAzureSearchIndexer, IAzureSearchSearcher, IPublishedContentChangeStrategy>(
+                Umbraco.Cms.Search.Core.Constants.IndexAliases.PublishedContent, UmbracoObjectTypes.Document);
+            options.RegisterContentIndex<IAzureSearchIndexer, IAzureSearchSearcher, IDraftContentChangeStrategy>(
+                Umbraco.Cms.Search.Core.Constants.IndexAliases.DraftMedia, UmbracoObjectTypes.Media);
+            options.RegisterContentIndex<IAzureSearchIndexer, IAzureSearchSearcher, IDraftContentChangeStrategy>(
+                Umbraco.Cms.Search.Core.Constants.IndexAliases.DraftMembers, UmbracoObjectTypes.Member);
+        });
+
         return services;
     }
 

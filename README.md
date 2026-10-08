@@ -8,7 +8,7 @@ An [Azure AI Search](https://azure.microsoft.com/en-us/products/ai-services/ai-s
 
 ## Prerequisites
 
-- Umbraco v17+
+- Umbraco v17
 - An Azure AI Search instance ([create one in the Azure portal](https://portal.azure.com))
 
 ## Installation
@@ -47,6 +47,8 @@ public sealed class SearchComposer : IComposer
     }
 }
 ```
+
+`AddUmbracoAzureSearch` registers the four default Umbraco Search indexes (`Umb_Content`, `Umb_PublishedContent`, `Umb_Media` and `Umb_Members`) against Azure AI Search. To change one of them or add your own, configure `IndexOptions` after this call; the last registration for an alias wins.
 
 ## Usage
 
