@@ -1,5 +1,8 @@
+using Azure.Core;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using Throw;
 using Umbraco.Cms.Core.DependencyInjection;
 using Umbraco.Cms.Core.Models;
 using Umbraco.Cms.Core.Notifications;
@@ -19,10 +22,24 @@ namespace UmbracoAzureSearch.Extensions;
 public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddUmbracoAzureSearch(this IServiceCollection services, IConfiguration configuration)
+        => services.AddUmbracoAzureSearchCore(configuration, null);
+
+    /// <summary>
+    /// Authenticates with a Microsoft Entra ID credential (e.g. <c>DefaultAzureCredential</c> for a managed identity) instead
+    /// of <c>UmbracoAzureSearch:Key</c>. The service must allow role-based access, and the identity needs the
+    /// Search Service Contributor and Search Index Data Contributor roles.
+    /// </summary>
+    public static IServiceCollection AddUmbracoAzureSearch(this IServiceCollection services, IConfiguration configuration, TokenCredential credential)
+        => services.AddUmbracoAzureSearchCore(configuration, credential.ThrowIfNull());
+
+    private static IServiceCollection AddUmbracoAzureSearchCore(this IServiceCollection services, IConfiguration configuration, TokenCredential? credential)
     {
         services
             .Configure<UmbracoAzureSearchOptions>(configuration.GetSection(UmbracoAzureSearchOptions.Name))
-            .AddSingleton<IAzureSearchClientFactory, AzureSearchClientFactory>()
+            .AddSingleton<IAzureSearchClientFactory>(sp => new AzureSearchClientFactory(
+                sp.GetRequiredService<IOptions<UmbracoAzureSearchOptions>>(),
+                sp.GetRequiredService<IIndexAliasResolver>(),
+                credential))
             .AddSingleton<IIndexAliasResolver, IndexAliasResolver>()
             .AddSingleton<IAzureSearchIndexManager, AzureSearchIndexManager>()
             .AddSingleton<IAzureSearchIndexer, AzureSearchIndexer>()
