@@ -5,6 +5,8 @@ internal static class IndexConstants
 {
     public const string ProviderIdentifier = "Krebil.UmbracoAzureSearch";
 
+    public const string SuggesterName = "sg";
+
     public static class Variation
     {
         public const string InvariantCulture = "inv";
@@ -35,6 +37,8 @@ internal static class IndexConstants
         public const string AllTextsR3 = "allTextsR3";
 
         public const string Fields = "fields";
+
+        public const string Suggestion = "suggestion";
     }
 
     public static class FieldTypePostfix
