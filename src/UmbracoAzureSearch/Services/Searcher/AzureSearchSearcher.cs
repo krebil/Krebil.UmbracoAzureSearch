@@ -344,8 +344,7 @@ public class AzureSearchSearcher(
         {
             Mode = AutocompleteMode.OneTermWithContext,
             Size = Math.Min(maxSuggestions, MaxAutocompleteSize),
-            Filter = string.Join(" and ", filterClauses),
-            UseFuzzyMatching = suggestionOptions.Fuzzy
+            Filter = string.Join(" and ", filterClauses)
         };
         Response<AutocompleteResults> response;
         try

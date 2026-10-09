@@ -14,9 +14,4 @@ public class SuggestionOptions
     /// The Umbraco fields whose texts feed suggestions. Null or empty uses all highest-relevance (R1) texts.
     /// </summary>
     public string[]? Fields { get; set; }
-
-    /// <summary>
-    /// Matches the last term with an edit distance of 1. Slower; off by default.
-    /// </summary>
-    public bool Fuzzy { get; set; }
 }

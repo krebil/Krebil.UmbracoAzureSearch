@@ -190,7 +190,7 @@ public class AzureSearchSearcherSuggestionTests
     }
 
     [Test]
-    public async Task UsesExactMatchingWithoutHighlightsByDefault()
+    public async Task UsesExactMatchingWithoutHighlights()
     {
         var service = new FakeSearchService();
 
@@ -203,17 +203,6 @@ public class AzureSearchSearcherSuggestionTests
             Assert.That(body.TryGetProperty("highlightPreTag", out _), Is.False);
             Assert.That(body.TryGetProperty("highlightPostTag", out _), Is.False);
         });
-    }
-
-    [Test]
-    public async Task UsesFuzzyMatchingWhenEnabledForTheIndex()
-    {
-        var service = new FakeSearchService();
-        service.Settings[$"UmbracoAzureSearch:Suggestions:{IndexAlias}:Fuzzy"] = "true";
-
-        await service.CreateSearcher().SearchAsync(IndexAlias, query: "re", maxSuggestions: 5);
-
-        Assert.That(service.LastAutocompleteBody().GetProperty("fuzzy").GetBoolean(), Is.True);
     }
 
     [Test]
