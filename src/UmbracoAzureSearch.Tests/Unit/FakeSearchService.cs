@@ -4,6 +4,7 @@ using System.Text.Json;
 using Azure.Core.Pipeline;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Umbraco.Cms.Core.Sync;
 using UmbracoAzureSearch.Extensions;
 using UmbracoAzureSearch.Services.Factory;
@@ -22,6 +23,18 @@ internal sealed class FakeSearchService : HttpMessageHandler
     /// <summary>Report <see cref="UnknownField"/> for every search, whether the search names it or not.</summary>
     public bool UnknownFieldAlways { get; set; }
 
+    /// <summary>Extra configuration, e.g. <c>["UmbracoAzureSearch:Suggestions:my-index:Enabled"] = "false"</c>.</summary>
+    public Dictionary<string, string?> Settings { get; } = [];
+
+    /// <summary>Answers a request before the defaults; returning null falls through to them.</summary>
+    public Func<HttpRequestMessage, HttpResponseMessage?>? Respond { get; set; }
+
+    /// <summary>Awaited before each request is answered, e.g. to hold requests until others arrive.</summary>
+    public Func<HttpRequestMessage, Task>? BeforeRespond { get; set; }
+
+    /// <summary>Everything the services logged.</summary>
+    public List<(LogLevel Level, string Message)> Logs { get; } = [];
+
     public IServiceProvider CreateServices(ServerRole serverRole = ServerRole.Single)
     {
         var configuration = new ConfigurationBuilder()
@@ -30,10 +43,11 @@ internal sealed class FakeSearchService : HttpMessageHandler
                 ["UmbracoAzureSearch:Endpoint"] = "https://unit-test.search.windows.net",
                 ["UmbracoAzureSearch:Key"] = "test-key",
             })
+            .AddInMemoryCollection(Settings)
             .Build();
 
         var services = new ServiceCollection()
-            .AddLogging()
+            .AddLogging(logging => logging.AddProvider(new RecordingLoggerProvider(Logs)))
             .AddSingleton<IServerRoleAccessor>(new FixedServerRoleAccessor(serverRole))
             .AddUmbracoAzureSearch(configuration)
             .BuildServiceProvider();
@@ -47,7 +61,11 @@ internal sealed class FakeSearchService : HttpMessageHandler
 
     public JsonElement LastSearchBody()
     {
-        var body = Requests.Last(r => r.Path.Contains("search.post.search")).Body;
+        string? body;
+        lock (Requests)
+        {
+            body = Requests.Last(r => r.Path.Contains("search.post.search")).Body;
+        }
         Assert.That(body, Is.Not.Null);
         return JsonDocument.Parse(body!).RootElement;
     }
@@ -55,18 +73,53 @@ internal sealed class FakeSearchService : HttpMessageHandler
     public string? LastFilter()
         => LastSearchBody().TryGetProperty("filter", out var filter) ? filter.GetString() : null;
 
+    public JsonElement LastAutocompleteBody()
+    {
+        string? body;
+        lock (Requests)
+        {
+            body = Requests.Last(r => r.Path.Contains("search.post.autocomplete")).Body;
+        }
+        Assert.That(body, Is.Not.Null);
+        return JsonDocument.Parse(body!).RootElement;
+    }
+
+    public bool SentAutocomplete()
+    {
+        lock (Requests)
+        {
+            return Requests.Any(r => r.Path.Contains("search.post.autocomplete"));
+        }
+    }
+
+    public static HttpResponseMessage Json(string json, HttpStatusCode status = HttpStatusCode.OK)
+        => new(status) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+
     public string? LastOrderBy()
         => LastSearchBody().TryGetProperty("orderby", out var orderBy) ? orderBy.GetString() : null;
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
+        // A real transport returns to the caller while the request is in flight.
+        await Task.Yield();
+
         var body = request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken);
-        Requests.Add((request.Method, request.RequestUri!.AbsolutePath, body));
+        lock (Requests)
+        {
+            Requests.Add((request.Method, request.RequestUri!.AbsolutePath, body));
+        }
+
+        if (BeforeRespond is not null)
+            await BeforeRespond(request);
+
+        if (Respond?.Invoke(request) is { } response)
+            return response;
 
         if (request.Method == HttpMethod.Delete)
             return new HttpResponseMessage(HttpStatusCode.NoContent);
 
-        if (UnknownField is { } unknown && request.RequestUri!.AbsolutePath.Contains("search.post.search")
+        if (UnknownField is { } unknown
+            && (request.RequestUri!.AbsolutePath.Contains("search.post.search") || request.RequestUri.AbsolutePath.Contains("search.post.autocomplete"))
             && (UnknownFieldAlways || body?.Contains(unknown) == true))
         {
             return new HttpResponseMessage(HttpStatusCode.BadRequest)
@@ -78,7 +131,9 @@ internal sealed class FakeSearchService : HttpMessageHandler
             };
         }
 
-        var json = request.RequestUri.AbsolutePath.Contains("/docs/")
+        var json = request.RequestUri!.AbsolutePath.Contains("search.post.autocomplete")
+            ? """{"value":[]}"""
+            : request.RequestUri.AbsolutePath.Contains("/docs/")
             ? """{"@odata.count":0,"value":[]}"""
             : """{"name":"unit-test-index","fields":[{"name":"id","type":"Edm.String","key":true}]}""";
         var status = request.Method == HttpMethod.Post && !request.RequestUri.AbsolutePath.Contains("/docs/")
@@ -88,6 +143,30 @@ internal sealed class FakeSearchService : HttpMessageHandler
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json")
         };
+    }
+
+    private sealed class RecordingLoggerProvider(List<(LogLevel, string)> logs) : ILoggerProvider
+    {
+        public ILogger CreateLogger(string categoryName) => new RecordingLogger(logs);
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class RecordingLogger(List<(LogLevel, string)> logs) : ILogger
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            lock (logs)
+            {
+                logs.Add((logLevel, formatter(state, exception)));
+            }
+        }
     }
 
     internal sealed class FixedServerRoleAccessor(ServerRole serverRole) : IServerRoleAccessor

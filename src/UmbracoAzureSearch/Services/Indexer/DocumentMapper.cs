@@ -7,6 +7,7 @@ using Umbraco.Cms.Search.Core.Models.Indexing;
 using Umbraco.Extensions;
 using UmbracoAzureSearch.Constants;
 using UmbracoAzureSearch.Extensions;
+using UmbracoAzureSearch.Models;
 
 namespace UmbracoAzureSearch.Services.Indexer;
 
@@ -32,7 +33,8 @@ public class DocumentMapper
         UmbracoObjectTypes objectType,
         IEnumerable<Variation> variations,
         IEnumerable<IndexField> fields,
-        ContentProtection? protection)
+        ContentProtection? protection,
+        SuggestionOptions suggestionOptions)
     {
         var fieldsByFieldName = fields.GroupBy(field => field.FieldName);
         var allFieldMappings = new List<IndexFieldMapping>();
@@ -45,7 +47,8 @@ public class DocumentMapper
                 objectType,
                 variation,
                 fieldsByFieldName,
-                protection);
+                protection,
+                suggestionOptions);
 
             documents.Add(document);
             allFieldMappings.AddRange(variationMappings);
@@ -69,7 +72,8 @@ public class DocumentMapper
         UmbracoObjectTypes objectType,
         Variation variation,
         IEnumerable<IGrouping<string, IndexField>> fieldsByFieldName,
-        ContentProtection? protection)
+        ContentProtection? protection,
+        SuggestionOptions suggestionOptions)
     {
         // document variation
         var culture = variation.Culture.IndexCulture();
@@ -173,6 +177,14 @@ public class DocumentMapper
             [IndexConstants.FieldNames.AllTextsR3] = allTextsR3,
         };
 
+        if (suggestionOptions.Enabled)
+        {
+            var suggestionTexts = SuggestionTexts(variationFields, allTextsR1, suggestionOptions);
+            document[IndexConstants.FieldNames.Suggestion] = suggestionTexts.Length > 0
+                ? string.Join(" ", suggestionTexts)
+                : null;
+        }
+
         foreach (var mapping in fieldMappings)
         {
             document[mapping.FieldName] = mapping.IsCollection                                                                                                                                                                                
@@ -181,6 +193,21 @@ public class DocumentMapper
         }
 
         return (document, fieldMappings);
+    }
+
+    // The configured fields with all their texts, or by default every highest-relevance (R1) text.
+    private static string[] SuggestionTexts(IndexField[] variationFields, string[] allTextsR1, SuggestionOptions suggestionOptions)
+    {
+        if (suggestionOptions.Fields is not { Length: > 0 } fieldNames)
+            return allTextsR1;
+
+        return variationFields
+            .Where(field => fieldNames.Contains(field.FieldName, StringComparer.OrdinalIgnoreCase))
+            .SelectMany(field => (field.Value.Texts ?? [])
+                .Concat(field.Value.TextsR1 ?? [])
+                .Concat(field.Value.TextsR2 ?? [])
+                .Concat(field.Value.TextsR3 ?? []))
+            .ToArray();
     }
 
     private IEnumerable<IndexFieldMapping> CreateFieldMappings(IndexField[] variationFields)
