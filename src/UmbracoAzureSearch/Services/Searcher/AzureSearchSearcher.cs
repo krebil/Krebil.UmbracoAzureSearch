@@ -1,6 +1,11 @@
+using System.Collections.Concurrent;
 using System.Globalization;
+using System.Text.RegularExpressions;
+using Azure;
 using Azure.Search.Documents;
 using Azure.Search.Documents.Models;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Umbraco.Cms.Core;
 using Umbraco.Cms.Core.Models;
 using Umbraco.Cms.Core.Sync;
@@ -21,7 +26,9 @@ namespace UmbracoAzureSearch.Services.Searcher;
 
 public class AzureSearchSearcher(
     IServerRoleAccessor serverRoleAccessor,
-    IAzureSearchClientFactory azureSearchClientFactory)
+    IAzureSearchClientFactory azureSearchClientFactory,
+    IOptions<UmbracoAzureSearchOptions> azureSearchOptions,
+    ILogger<AzureSearchSearcher> logger)
     : UmbracoAzureServiceBase(serverRoleAccessor), IAzureSearchSearcher
 {
     private const int MaxOrderByClauses = 32;
@@ -29,6 +36,13 @@ public class AzureSearchSearcher(
     // Field names go into the OData text unquoted, so only identifiers are accepted: anything else could end a clause.
     private static readonly System.Text.RegularExpressions.Regex FieldNamePattern =
         new("^[A-Za-z_][A-Za-z0-9_]*$", System.Text.RegularExpressions.RegexOptions.Compiled);
+    // Azure accepts 1 to 100 for the Autocomplete top parameter.
+    private const int MaxAutocompleteSize = 100;
+
+    // Index aliases already warned about a missing suggester; shared because the searcher is transient.
+    private static readonly ConcurrentDictionary<string, bool> MissingSuggesterWarnings = new(StringComparer.OrdinalIgnoreCase);
+
+    private static readonly Regex WhitespacePattern = new(@"\s+", RegexOptions.Compiled, TimeSpan.FromSeconds(1));
 
     public Task<SearchResult> SearchAsync(
         string indexAlias,
@@ -45,7 +59,7 @@ public class AzureSearchSearcher(
         SearchQueryType queryType = SearchQueryType.Simple,
         SearchMode searchMode = SearchMode.All)
         => SearchCoreAsync(indexAlias, query, filters, facets, sorters, culture, segment,
-            accessContext, skip, take, queryType, searchMode);
+            accessContext, skip, take, maxSuggestions, queryType, searchMode);
 
     // Explicit ISearcher implementation forwards to the core method with defaults.
     Task<SearchResult> ISearcher.SearchAsync(
@@ -61,7 +75,7 @@ public class AzureSearchSearcher(
         int take,
         int maxSuggestions)
         => SearchCoreAsync(indexAlias, query, filters, facets, sorters, culture, segment,
-            accessContext, skip, take, SearchQueryType.Simple, SearchMode.All);
+            accessContext, skip, take, maxSuggestions, SearchQueryType.Simple, SearchMode.All);
 
     private async Task<SearchResult> SearchCoreAsync(
         string indexAlias,
@@ -74,6 +88,7 @@ public class AzureSearchSearcher(
         AccessContext? accessContext,
         int skip,
         int take,
+        int maxSuggestions,
         SearchQueryType queryType,
         SearchMode searchMode)
     {
@@ -152,6 +167,18 @@ public class AzureSearchSearcher(
             }
         }
 
+        // Build suggestion filter clauses: Autocomplete rejects search.ismatchscoring, so text filters are left out.
+        // Suggestions can then be broader than the results, but never beyond the access clause.
+        var suggestionFilterClauses = new List<string>(baseFilterClauses);
+        foreach (var filter in filtersArray.Where(f => f is not TextFilter))
+        {
+            var filterClause = BuildFilterClause(filter);
+            if (!string.IsNullOrEmpty(filterClause))
+            {
+                suggestionFilterClauses.Add(filterClause);
+            }
+        }
+
         // Build facet filter clauses (excludes same-field filters for proper facet counts)
         var facetFilterClauses = new List<string>(baseFilterClauses);
         foreach (var filter in regularFilters)
@@ -225,8 +252,38 @@ public class AzureSearchSearcher(
             searchOptions.Filter = string.Join(" and ", filterClauses);
         }
 
-        // Execute main search (for documents and different-field facets)
-        var result = await searchClient.SearchAsync<SearchDocument>(searchText, searchOptions);
+        // Same-field facets need a separate query without the same-field filters
+        SearchOptions? facetSearchOptions = null;
+        if (sameFieldFacetExpressions.Count > 0)
+        {
+            facetSearchOptions = new SearchOptions
+            {
+                Size = 0, // Don't need documents, just facets
+                IncludeTotalCount = false,
+                SearchMode = SearchMode.All
+            };
+
+            foreach (var expr in sameFieldFacetExpressions)
+            {
+                facetSearchOptions.Facets.Add(expr);
+            }
+
+            if (facetFilterClauses.Any())
+            {
+                facetSearchOptions.Filter = string.Join(" and ", facetFilterClauses);
+            }
+        }
+
+        // None of the requests depends on another's result, so they run together.
+        var mainSearchTask = searchClient.SearchAsync<SearchDocument>(searchText, searchOptions);
+        var facetSearchTask = facetSearchOptions is null
+            ? Task.FromResult<Response<SearchResults<SearchDocument>>?>(null)
+            : SearchOrNullAsync(searchClient, searchText, facetSearchOptions);
+        var suggestionsTask = GetSuggestionsAsync(
+            searchClient, indexAlias, query, maxSuggestions, suggestionFilterClauses, azureSearchOptions.Value.GetSuggestionOptions(indexAlias));
+        await Task.WhenAll(mainSearchTask, facetSearchTask, suggestionsTask);
+
+        var result = await mainSearchTask;
 
         // Extract documents from results
         var documents = new List<Document>();
@@ -252,41 +309,79 @@ public class AzureSearchSearcher(
             }
         }
 
-        // Run separate query for same-field facets (without same-field filters)
-        if (sameFieldFacetExpressions.Count > 0)
+        // Merge same-field facet results (computed without same-field filters)
+        var facetResult = await facetSearchTask;
+        if (facetResult?.Value.Facets != null)
         {
-            var facetSearchOptions = new SearchOptions
+            foreach (var kvp in facetResult.Value.Facets)
             {
-                Size = 0, // Don't need documents, just facets
-                IncludeTotalCount = false,
-                SearchMode = SearchMode.All
-            };
-
-            foreach (var expr in sameFieldFacetExpressions)
-            {
-                facetSearchOptions.Facets.Add(expr);
-            }
-
-            if (facetFilterClauses.Any())
-            {
-                facetSearchOptions.Filter = string.Join(" and ", facetFilterClauses);
-            }
-
-            var facetResult = await searchClient.SearchAsync<SearchDocument>(searchText, facetSearchOptions);
-            if (facetResult.Value.Facets != null)
-            {
-                foreach (var kvp in facetResult.Value.Facets)
-                {
-                    facetResultsData[kvp.Key] = kvp.Value;
-                }
+                facetResultsData[kvp.Key] = kvp.Value;
             }
         }
 
         // Parse facet results
         var facetResults = ParseFacetResults(facetResultsData, facetFieldMap);
 
-        return new SearchResult(result.Value.TotalCount ?? 0, documents.ToArray(), facetResults.ToArray());
+        var suggestions = await suggestionsTask;
+        return new SearchResult(result.Value.TotalCount ?? 0, documents.ToArray(), facetResults.ToArray(), suggestions);
     }
+
+    private static async Task<Response<SearchResults<SearchDocument>>?> SearchOrNullAsync(
+        SearchClient searchClient, string searchText, SearchOptions options)
+        => await searchClient.SearchAsync<SearchDocument>(searchText, options);
+
+    private async Task<IEnumerable<string>?> GetSuggestionsAsync(
+        SearchClient searchClient,
+        string indexAlias,
+        string? query,
+        int maxSuggestions,
+        List<string> filterClauses,
+        SuggestionOptions suggestionOptions)
+    {
+        // The raw query, not the "*"-suffixed search text: Autocomplete completes the last term itself.
+        var suggestionQuery = WhitespacePattern.Replace(query ?? string.Empty, " ").Trim();
+        if (maxSuggestions <= 0 || suggestionQuery.Length == 0 || !suggestionOptions.Enabled)
+            return null;
+
+        var options = new AutocompleteOptions
+        {
+            Mode = AutocompleteMode.OneTermWithContext,
+            Size = Math.Min(maxSuggestions, MaxAutocompleteSize),
+            Filter = string.Join(" and ", filterClauses)
+        };
+        Response<AutocompleteResults> response;
+        try
+        {
+            response = await searchClient.AutocompleteAsync(suggestionQuery, IndexConstants.SuggesterName, options);
+        }
+        catch (RequestFailedException ex) when (IsMissingSuggester(ex))
+        {
+            // An index created before suggestions existed; EnsureAsync or a rebuild adds the suggester.
+            if (MissingSuggesterWarnings.TryAdd(indexAlias, true))
+            {
+                logger.LogWarning(
+                    "Index {IndexAlias} has no suggester, so it returns no suggestions. Rebuild the index to add it.",
+                    indexAlias);
+            }
+            return null;
+        }
+        catch (RequestFailedException ex)
+        {
+            // Suggestions are optional: a failed Autocomplete request must not fail the search.
+            logger.LogWarning(ex, "Suggestions for index {IndexAlias} failed with status {StatusCode}", indexAlias, ex.Status);
+            return null;
+        }
+
+        var suggestions = response.Value.Results
+            .Select(r => r.QueryPlusText)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(maxSuggestions)
+            .ToArray();
+        return suggestions.Length > 0 ? suggestions : null;
+    }
+
+    private static bool IsMissingSuggester(RequestFailedException ex)
+        => ex.Status == 400 && ex.Message.Contains("suggester name", StringComparison.OrdinalIgnoreCase);
 
     // Mirrors the Examine provider: without a member only unprotected documents (Guid.Empty) match.
     private static string? BuildAccessClause(AccessContext? accessContext)

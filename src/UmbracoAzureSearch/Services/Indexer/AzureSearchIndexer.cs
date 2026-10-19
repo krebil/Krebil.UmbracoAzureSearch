@@ -2,11 +2,13 @@ using Azure.Search.Documents;
 using Azure.Search.Documents.Indexes.Models;
 using Azure.Search.Documents.Models;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Throw;
 using Umbraco.Cms.Core.Models;
 using Umbraco.Cms.Core.Sync;
 using Umbraco.Cms.Search.Core.Models.Indexing;
 using UmbracoAzureSearch.Constants;
+using UmbracoAzureSearch.Models;
 using UmbracoAzureSearch.Services.Factory;
 using UmbracoAzureSearch.Services.IndexAliasResolver;
 using UmbracoAzureSearch.Services.IndexManager;
@@ -19,7 +21,8 @@ public class AzureSearchIndexer(
     IServerRoleAccessor serverRoleAccessor,
     IIndexAliasResolver indexAliasResolver,
     ILogger<AzureSearchIndexer> logger,
-    DocumentMapper documentMapper) : UmbracoAzureServiceBase(serverRoleAccessor), IAzureSearchIndexer
+    DocumentMapper documentMapper,
+    IOptions<UmbracoAzureSearchOptions> azureSearchOptions) : UmbracoAzureServiceBase(serverRoleAccessor), IAzureSearchIndexer
 {
     public async Task AddOrUpdateAsync(string indexAlias, Guid id, UmbracoObjectTypes objectType,
         IEnumerable<Variation> variations,
@@ -30,7 +33,8 @@ public class AzureSearchIndexer(
 
         var searchClient = azureSearchClientFactory.GetSearchClient(indexAlias);
 
-        var mappingResult = documentMapper.MapToDocuments(id, objectType, variations, fields, protection);
+        var mappingResult = documentMapper.MapToDocuments(
+            id, objectType, variations, fields, protection, azureSearchOptions.Value.GetSuggestionOptions(indexAlias));
 
         await EnsureFieldsExist(indexAlias, mappingResult.FieldMappings);
         var batch = IndexDocumentsBatch.MergeOrUpload(mappingResult.Documents);
