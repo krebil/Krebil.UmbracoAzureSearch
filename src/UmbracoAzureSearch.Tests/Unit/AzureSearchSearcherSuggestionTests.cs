@@ -1,9 +1,8 @@
+using System.Net;
+using Microsoft.Extensions.Logging;
 using Umbraco.Cms.Search.Core.Models.Searching;
 using Umbraco.Cms.Search.Core.Models.Searching.Faceting;
 using Umbraco.Cms.Search.Core.Models.Searching.Filtering;
-
-using System.Net;
-using Microsoft.Extensions.Logging;
 
 namespace UmbracoAzureSearch.Tests.Unit;
 
@@ -255,19 +254,18 @@ public class AzureSearchSearcherSuggestionTests
     [Test]
     public async Task SendsTheSearchFacetAndSuggestionRequestsTogether()
     {
-        // Each request waits until all three have arrived; requests sent one after another time out.
-        using var allArrived = new CountdownEvent(3);
-        var timedOut = false;
+        // Each request waits until all three have arrived; a request sent before the others times out.
+        var arrived = 0;
+        var allArrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var service = new FakeSearchService
         {
-            Respond = request =>
+            BeforeRespond = async request =>
             {
-                if (request.RequestUri!.AbsolutePath.Contains("/docs/"))
-                {
-                    allArrived.Signal();
-                    timedOut |= !allArrived.Wait(TimeSpan.FromSeconds(2));
-                }
-                return null;
+                if (!request.RequestUri!.AbsolutePath.Contains("/docs/"))
+                    return;
+                if (Interlocked.Increment(ref arrived) == 3)
+                    allArrived.TrySetResult();
+                await allArrived.Task.WaitAsync(TimeSpan.FromSeconds(2));
             }
         };
 
@@ -278,6 +276,28 @@ public class AzureSearchSearcherSuggestionTests
             facets: [new KeywordFacet("genre")],
             maxSuggestions: 5);
 
-        Assert.That(timedOut, Is.False);
+        Assert.That(arrived, Is.EqualTo(3));
+    }
+
+    [Test]
+    public async Task ANegatedFilterOnAFieldNoDocumentHasDoesNotFailSuggestions()
+    {
+        var service = new FakeSearchService
+        {
+            UnknownField = "topic_keywords",
+            Respond = request => request.RequestUri!.AbsolutePath.Contains("search.post.autocomplete")
+                && !request.Content!.ReadAsStringAsync().Result.Contains("topic_keywords")
+                    ? FakeSearchService.Json("""{"value":[{"text":"red","queryPlusText":"red"}]}""")
+                    : null
+        };
+
+        var result = await service.CreateSearcher().SearchAsync(
+            IndexAlias, query: "re", filters: [new KeywordFilter("topic", ["news"], true)], maxSuggestions: 5);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Suggestions, Is.EqualTo(new[] { "red" }));
+            Assert.That(Warnings(service), Is.Empty);
+        });
     }
 }

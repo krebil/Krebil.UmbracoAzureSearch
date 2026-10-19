@@ -104,7 +104,7 @@ public class AzureSearchSearcher(
             try
             {
                 return await SearchOnceAsync(indexAlias, query, filters, facets, sorters, culture, segment, accessContext,
-                    skip, take, maxSuggestions ,queryType, searchMode, unknownFields);
+                    skip, take, maxSuggestions, queryType, searchMode, unknownFields);
             }
             catch (Azure.RequestFailedException ex) when (ex.Status == 400
                 && UnknownFieldPattern.Match(ex.Message) is { Success: true } match
@@ -204,38 +204,14 @@ public class AzureSearchSearcher(
         var regularFilters = filtersArray.Except(sameFieldFilters).ToArray();
 
         // Build full filter clauses (for document query)
-        var filterClauses = new List<string>(baseFilterClauses);
-        foreach (var filter in filtersArray)
-        {
-            var filterClause = BuildFilterClause(filter);
-            if (!string.IsNullOrEmpty(filterClause))
-            {
-                filterClauses.Add(filterClause);
-            }
-        }
+        var filterClauses = BuildFilterClauses(baseFilterClauses, filtersArray);
 
         // Build suggestion filter clauses: Autocomplete rejects search.ismatchscoring, so text filters are left out.
         // Suggestions can then be broader than the results, but never beyond the access clause.
-        var suggestionFilterClauses = new List<string>(baseFilterClauses);
-        foreach (var filter in filtersArray.Where(f => f is not TextFilter))
-        {
-            var filterClause = BuildFilterClause(filter);
-            if (!string.IsNullOrEmpty(filterClause))
-            {
-                suggestionFilterClauses.Add(filterClause);
-            }
-        }
+        var suggestionFilterClauses = BuildFilterClauses(baseFilterClauses, filtersArray.Where(f => f is not TextFilter));
 
         // Build facet filter clauses (excludes same-field filters for proper facet counts)
-        var facetFilterClauses = new List<string>(baseFilterClauses);
-        foreach (var filter in regularFilters)
-        {
-            var filterClause = BuildFilterClause(filter);
-            if (!string.IsNullOrEmpty(filterClause))
-            {
-                facetFilterClauses.Add(filterClause);
-            }
-        }
+        var facetFilterClauses = BuildFilterClauses(baseFilterClauses, regularFilters);
 
         // Sorting - default to score descending when no sorters provided
         var effectiveSorters = (sorters ?? []).Where(sorter => SortField(sorter) is not { } field || !unknownFields.Contains(field)).ToArray();
@@ -407,9 +383,14 @@ public class AzureSearchSearcher(
             if (MissingSuggesterWarnings.TryAdd(indexAlias, true))
             {
                 logger.LogWarning(
-                    "Index {IndexAlias} has no suggester, so it returns no suggestions. Rebuild the index to add it.",
-                    indexAlias);
+                    "Index {IndexAlias} has no suggester (status {StatusCode}), so it returns no suggestions. Rebuild the index to add it.",
+                    indexAlias, ex.Status);
             }
+            return null;
+        }
+        catch (RequestFailedException ex) when (ex.Status == 400 && UnknownFieldPattern.IsMatch(ex.Message))
+        {
+            // The search fails on the same field and is repeated without it, suggestions included.
             return null;
         }
         catch (RequestFailedException ex)
@@ -478,6 +459,11 @@ public class AzureSearchSearcher(
         if (!FieldNamePattern.IsMatch(fieldName))
             throw new ArgumentException($"'{fieldName}' is not a valid field name: letters, digits and underscores only.", nameof(fieldName));
     }
+
+    private static List<string> BuildFilterClauses(IEnumerable<string> baseFilterClauses, IEnumerable<Filter> filters)
+        => baseFilterClauses
+            .Concat(filters.Select(BuildFilterClause).Where(clause => !string.IsNullOrEmpty(clause)))
+            .ToList();
 
     private static string BuildFilterClause(Filter filter)
     {

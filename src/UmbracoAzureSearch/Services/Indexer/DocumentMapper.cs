@@ -34,9 +34,8 @@ public class DocumentMapper
         IEnumerable<Variation> variations,
         IEnumerable<IndexField> fields,
         ContentProtection? protection,
-        SuggestionOptions? suggestionOptions = null)
+        SuggestionOptions suggestionOptions)
     {
-        suggestionOptions ??= new SuggestionOptions();
         var fieldsByFieldName = fields.GroupBy(field => field.FieldName);
         var allFieldMappings = new List<IndexFieldMapping>();
         var documents = new List<SearchDocument>();
