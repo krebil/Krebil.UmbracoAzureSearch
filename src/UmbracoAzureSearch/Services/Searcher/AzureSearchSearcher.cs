@@ -104,7 +104,7 @@ public class AzureSearchSearcher(
             try
             {
                 return await SearchOnceAsync(indexAlias, query, filters, facets, sorters, culture, segment, accessContext,
-                    skip, take, queryType, searchMode, unknownFields);
+                    skip, take, maxSuggestions ,queryType, searchMode, unknownFields);
             }
             catch (Azure.RequestFailedException ex) when (ex.Status == 400
                 && UnknownFieldPattern.Match(ex.Message) is { Success: true } match
@@ -127,6 +127,7 @@ public class AzureSearchSearcher(
         AccessContext? accessContext,
         int skip,
         int take,
+        int maxSuggestions,
         SearchQueryType queryType,
         SearchMode searchMode,
         ISet<string> unknownFields)

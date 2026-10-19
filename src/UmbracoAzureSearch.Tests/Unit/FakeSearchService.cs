@@ -108,8 +108,7 @@ internal sealed class FakeSearchService : HttpMessageHandler
             };
         }
 
-        var json = request.RequestUri.AbsolutePath.Contains("/docs/")
-        var jsonSearch = request.RequestUri!.AbsolutePath.Contains("search.post.autocomplete")
+        var json = request.RequestUri!.AbsolutePath.Contains("search.post.autocomplete")
             ? """{"value":[]}"""
             : request.RequestUri.AbsolutePath.Contains("/docs/")
             ? """{"@odata.count":0,"value":[]}"""
