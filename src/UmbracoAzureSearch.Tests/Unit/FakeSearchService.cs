@@ -96,7 +96,8 @@ internal sealed class FakeSearchService : HttpMessageHandler
         if (request.Method == HttpMethod.Delete)
             return new HttpResponseMessage(HttpStatusCode.NoContent);
 
-        if (UnknownField is { } unknown && request.RequestUri!.AbsolutePath.Contains("search.post.search")
+        if (UnknownField is { } unknown
+            && (request.RequestUri!.AbsolutePath.Contains("search.post.search") || request.RequestUri.AbsolutePath.Contains("search.post.autocomplete"))
             && (UnknownFieldAlways || body?.Contains(unknown) == true))
         {
             return new HttpResponseMessage(HttpStatusCode.BadRequest)
