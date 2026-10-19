@@ -104,7 +104,7 @@ public class AzureSearchSearcher(
             try
             {
                 return await SearchOnceAsync(indexAlias, query, filters, facets, sorters, culture, segment, accessContext,
-                    skip, take, maxSuggestions ,queryType, searchMode, unknownFields);
+                    skip, take, maxSuggestions, queryType, searchMode, unknownFields);
             }
             catch (Azure.RequestFailedException ex) when (ex.Status == 400
                 && UnknownFieldPattern.Match(ex.Message) is { Success: true } match
@@ -407,9 +407,14 @@ public class AzureSearchSearcher(
             if (MissingSuggesterWarnings.TryAdd(indexAlias, true))
             {
                 logger.LogWarning(
-                    "Index {IndexAlias} has no suggester, so it returns no suggestions. Rebuild the index to add it.",
-                    indexAlias);
+                    "Index {IndexAlias} has no suggester (status {StatusCode}), so it returns no suggestions. Rebuild the index to add it.",
+                    indexAlias, ex.Status);
             }
+            return null;
+        }
+        catch (RequestFailedException ex) when (ex.Status == 400 && UnknownFieldPattern.IsMatch(ex.Message))
+        {
+            // The search fails on the same field and is repeated without it, suggestions included.
             return null;
         }
         catch (RequestFailedException ex)

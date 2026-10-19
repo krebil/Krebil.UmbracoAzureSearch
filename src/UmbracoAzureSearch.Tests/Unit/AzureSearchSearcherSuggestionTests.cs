@@ -280,4 +280,26 @@ public class AzureSearchSearcherSuggestionTests
 
         Assert.That(timedOut, Is.False);
     }
+
+    [Test]
+    public async Task ANegatedFilterOnAFieldNoDocumentHasDoesNotFailSuggestions()
+    {
+        var service = new FakeSearchService
+        {
+            UnknownField = "topic_keywords",
+            Respond = request => request.RequestUri!.AbsolutePath.Contains("search.post.autocomplete")
+                && !request.Content!.ReadAsStringAsync().Result.Contains("topic_keywords")
+                    ? FakeSearchService.Json("""{"value":[{"text":"red","queryPlusText":"red"}]}""")
+                    : null
+        };
+
+        var result = await service.CreateSearcher().SearchAsync(
+            IndexAlias, query: "re", filters: [new KeywordFilter("topic", ["news"], true)], maxSuggestions: 5);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Suggestions, Is.EqualTo(new[] { "red" }));
+            Assert.That(Warnings(service), Is.Empty);
+        });
+    }
 }
