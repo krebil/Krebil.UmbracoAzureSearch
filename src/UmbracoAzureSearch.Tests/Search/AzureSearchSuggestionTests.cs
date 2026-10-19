@@ -23,17 +23,17 @@ public class AzureSearchSuggestionTests : AzureSearchTestBase
 
     protected override async Task PerformOneTimeSetUpAsync()
     {
-        await RecreateIndexAsync(this, IndexAlias);
+        await RecreateIndexAsync();
 
         // core / filter scoping data (invariant, public)
-        await AddDocumentAsync(this, IndexAlias, "red boat", tag: "a");
-        await AddDocumentAsync(this, IndexAlias, "red board", tag: "b");
-        await AddDocumentAsync(this, IndexAlias, "red book", tag: "b");
-        await AddDocumentAsync(this, IndexAlias, "read the news", tag: "b");
-        await AddDocumentAsync(this, IndexAlias, "reading list", tag: "b");
+        await AddDocumentAsync("red boat", tag: "a");
+        await AddDocumentAsync("red board", tag: "b");
+        await AddDocumentAsync("red book", tag: "b");
+        await AddDocumentAsync("read the news", tag: "b");
+        await AddDocumentAsync("reading list", tag: "b");
 
         // access scoping data (invariant, protected)
-        await AddDocumentAsync(this, IndexAlias, "secret manuscript", protection: new ContentProtection([_principalId]));
+        await AddDocumentAsync("secret manuscript", protection: new ContentProtection([_principalId]));
 
         // culture scoping data (single document varying by culture)
         await AddCultureDocumentAsync("umbraco workflow", "umbrella stand");
@@ -45,7 +45,7 @@ public class AzureSearchSuggestionTests : AzureSearchTestBase
     }
 
     protected override async Task PerformOneTimeTearDownAsync()
-        => await DeleteIndex(ResolvedName(this, IndexAlias));
+        => await DeleteIndex(ResolvedName());
 
     [Test]
     public async Task SuggestsNextWordFromSingleTypedWord()
@@ -235,48 +235,33 @@ public class AzureSearchSuggestionTests : AzureSearchTestBase
         return result;
     }
 
-    private async Task AddCultureDocumentAsync(string englishTitle, string danishTitle)
+    private Task AddCultureDocumentAsync(string englishTitle, string danishTitle)
+        => AddVariantDocumentAsync(
+            new IndexField(FieldTitle, new IndexValue { TextsR1 = [englishTitle] }, Culture: "en-US", Segment: null),
+            new IndexField(FieldTitle, new IndexValue { TextsR1 = [danishTitle] }, Culture: "da-DK", Segment: null));
+
+    private Task AddSegmentDocumentAsync(string defaultTitle, string segmentTitle)
+        => AddVariantDocumentAsync(
+            new IndexField(FieldTitle, new IndexValue { TextsR1 = [defaultTitle] }, Culture: null, Segment: null),
+            new IndexField(FieldTitle, new IndexValue { TextsR1 = [segmentTitle] }, Culture: null, Segment: "seg"));
+
+    // One document with a variation per field.
+    private async Task AddVariantDocumentAsync(params IndexField[] fields)
     {
         IAzureSearchIndexer indexer = GetRequiredService<IAzureSearchIndexer>();
         await indexer.AddOrUpdateAsync(
             IndexAlias,
             Guid.NewGuid(),
             UmbracoObjectTypes.Document,
-            [
-                new Variation(Culture: "en-US", Segment: null),
-                new Variation(Culture: "da-DK", Segment: null)
-            ],
-            [
-                new IndexField(FieldTitle, new IndexValue { TextsR1 = [englishTitle] }, Culture: "en-US", Segment: null),
-                new IndexField(FieldTitle, new IndexValue { TextsR1 = [danishTitle] }, Culture: "da-DK", Segment: null)
-            ],
+            fields.Select(f => new Variation(f.Culture, f.Segment)).ToArray(),
+            fields,
             null
         );
     }
 
-    private async Task AddSegmentDocumentAsync(string defaultTitle, string segmentTitle)
+    private async Task AddDocumentAsync(string title, string? tag = null, ContentProtection? protection = null)
     {
         IAzureSearchIndexer indexer = GetRequiredService<IAzureSearchIndexer>();
-        await indexer.AddOrUpdateAsync(
-            IndexAlias,
-            Guid.NewGuid(),
-            UmbracoObjectTypes.Document,
-            [
-                new Variation(Culture: null, Segment: null),
-                new Variation(Culture: null, Segment: "seg")
-            ],
-            [
-                new IndexField(FieldTitle, new IndexValue { TextsR1 = [defaultTitle] }, Culture: null, Segment: null),
-                new IndexField(FieldTitle, new IndexValue { TextsR1 = [segmentTitle] }, Culture: null, Segment: "seg")
-            ],
-            null
-        );
-    }
-
-    internal static async Task AddDocumentAsync(
-        AzureSearchTestBase test, string indexAlias, string title, string? tag = null, ContentProtection? protection = null)
-    {
-        IAzureSearchIndexer indexer = test.GetRequiredService<IAzureSearchIndexer>();
         var fields = new List<IndexField>
         {
             new(FieldTitle, new IndexValue { TextsR1 = [title] }, Culture: null, Segment: null)
@@ -287,7 +272,7 @@ public class AzureSearchSuggestionTests : AzureSearchTestBase
         }
 
         await indexer.AddOrUpdateAsync(
-            indexAlias,
+            IndexAlias,
             Guid.NewGuid(),
             UmbracoObjectTypes.Document,
             [new Variation(Culture: null, Segment: null)],
@@ -296,12 +281,12 @@ public class AzureSearchSuggestionTests : AzureSearchTestBase
         );
     }
 
-    internal static string ResolvedName(AzureSearchTestBase test, string indexAlias)
-        => test.GetRequiredService<IIndexAliasResolver>().Resolve(indexAlias);
+    private string ResolvedName()
+        => GetRequiredService<IIndexAliasResolver>().Resolve(IndexAlias);
 
-    internal static async Task RecreateIndexAsync(AzureSearchTestBase test, string indexAlias)
+    private async Task RecreateIndexAsync()
     {
-        await test.DeleteIndex(ResolvedName(test, indexAlias));
-        await test.GetRequiredService<IAzureSearchIndexManager>().EnsureAsync(indexAlias);
+        await DeleteIndex(ResolvedName());
+        await GetRequiredService<IAzureSearchIndexManager>().EnsureAsync(IndexAlias);
     }
 }
