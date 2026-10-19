@@ -1,4 +1,6 @@
+using Azure.Search.Documents.Indexes;
 using Azure.Search.Documents.Indexes.Models;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Throw;
 using Umbraco.Cms.Core.Sync;
@@ -13,13 +15,15 @@ public class AzureSearchIndexManager(
     IServerRoleAccessor serverRoleAccessor,
     IIndexAliasResolver indexAliasResolver,
     IAzureSearchClientFactory azureSearchClientFactory,
-    IOptions<UmbracoAzureSearchOptions> azureSearchOptions)
+    IOptions<UmbracoAzureSearchOptions> azureSearchOptions,
+    ILogger<AzureSearchIndexManager> logger)
     : UmbracoAzureServiceBase(serverRoleAccessor), IAzureSearchIndexManager
 {
     public async Task EnsureAsync(string indexAlias)
     {
         if (ShouldNotManipulateIndexes())
             return;
+        var umbracoIndexAlias = indexAlias;
         indexAlias = indexAliasResolver.Resolve(indexAlias);
         var searchIndexClient = azureSearchClientFactory.GetSearchIndexClient();
         var indexNames = new HashSet<string>();
@@ -38,9 +42,61 @@ public class AzureSearchIndexManager(
                 indexNames.Add(existingIndexName);
             }
         }
+        var suggestionOptions = azureSearchOptions.Value.GetSuggestionOptions(umbracoIndexAlias);
         if (indexNames.Contains(indexAlias))
+        {
+            if (suggestionOptions.Enabled)
+            {
+                await AddSuggestionsToExistingIndexAsync(searchIndexClient, indexAlias);
+            }
             return;
-        var newIndex = new SearchIndex(indexAlias, [
+        }
+        var newIndex = BuildIndex(indexAlias, suggestionOptions);
+        await searchIndexClient.CreateIndexAsync(newIndex);
+    }
+
+    public async Task ResetAsync(string indexAlias)
+    {
+        if (ShouldNotManipulateIndexes())
+            return;
+        var indexClient = azureSearchClientFactory.GetSearchIndexClient();
+        var suggestionOptions = azureSearchOptions.Value.GetSuggestionOptions(indexAlias);
+        indexAlias = indexAliasResolver.Resolve(indexAlias);
+        var index = await indexClient.GetIndexAsync(indexAlias);
+        index.ThrowIfNull();
+        await indexClient.DeleteIndexAsync(index);
+        // Recreate from code, not from the old definition, so a rebuild also applies schema changes such as
+        // suggestions. Property fields come back as the rebuild indexes documents (see EnsureFieldsExist).
+        await indexClient.CreateIndexAsync(BuildIndex(indexAlias, suggestionOptions));
+    }
+
+    // Indexes created before suggestions existed get the field and suggester in place; their documents fill on rebuild.
+    private async Task AddSuggestionsToExistingIndexAsync(SearchIndexClient searchIndexClient, string indexName)
+    {
+        SearchIndex index = await searchIndexClient.GetIndexAsync(indexName);
+        if (index.Fields.Any(f => f.Name == IndexConstants.FieldNames.Suggestion))
+            return;
+
+        // Azure allows one suggester per index; never replace one we did not create.
+        if (index.Suggesters.Count > 0)
+        {
+            logger.LogWarning(
+                "Index {IndexName} already has a suggester, so suggestions cannot be added. Remove it or turn suggestions off for this index.",
+                indexName);
+            return;
+        }
+
+        AddSuggestions(index);
+        await searchIndexClient.CreateOrUpdateIndexAsync(index);
+        logger.LogWarning(
+            "Added suggestions to index {IndexName}. Rebuild the index to fill them for existing content.",
+            indexName);
+    }
+
+    // The index definition in code; EnsureAsync and ResetAsync both create indexes from it.
+    private static SearchIndex BuildIndex(string indexName, SuggestionOptions suggestionOptions)
+    {
+        var newIndex = new SearchIndex(indexName, [
             new SearchField(IndexConstants.FieldNames.Id,  SearchFieldDataType.String)
             {
                 IsKey = true,
@@ -107,18 +163,24 @@ public class AzureSearchIndexManager(
         newIndex.ScoringProfiles.Add(scoringProfile);
         newIndex.DefaultScoringProfile = "relevanceBoost";
 
-        await searchIndexClient.CreateIndexAsync(newIndex);
+        if (suggestionOptions.Enabled)
+        {
+            AddSuggestions(newIndex);
+        }
+
+        return newIndex;
     }
 
-    public async Task ResetAsync(string indexAlias)
+    // Azure only allows a suggester on fields added in the same request, so the field and suggester always go together.
+    private static void AddSuggestions(SearchIndex index)
     {
-        if (ShouldNotManipulateIndexes())
-            return;
-        var indexClient = azureSearchClientFactory.GetSearchIndexClient();
-        indexAlias = indexAliasResolver.Resolve(indexAlias);
-        var index = await indexClient.GetIndexAsync(indexAlias);
-        index.ThrowIfNull();
-        await indexClient.DeleteIndexAsync(index);
-        await indexClient.CreateIndexAsync(index);
+        index.Fields.Add(new SearchField(IndexConstants.FieldNames.Suggestion, SearchFieldDataType.String)
+        {
+            IsSearchable = true,
+            IsFilterable = false,
+            IsFacetable = false,
+            AnalyzerName = LexicalAnalyzerName.StandardLucene
+        });
+        index.Suggesters.Add(new SearchSuggester(IndexConstants.SuggesterName, IndexConstants.FieldNames.Suggestion));
     }
 }

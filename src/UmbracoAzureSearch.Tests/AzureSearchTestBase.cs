@@ -65,7 +65,7 @@ public abstract class AzureSearchTestBase
     protected virtual Task PerformOneTimeTearDownAsync()
         => Task.CompletedTask;
 
-    protected T GetRequiredService<T>() where T : notnull
+    protected internal T GetRequiredService<T>() where T : notnull
         => _serviceProvider.GetRequiredService<T>();
 
     protected Task WaitForIndexingOperationsToCompleteAsync()
@@ -76,7 +76,7 @@ public abstract class AzureSearchTestBase
         return Task.CompletedTask;
     }
 
-    protected async Task DeleteIndex(string indexAlias)
+    protected internal async Task DeleteIndex(string indexAlias)
     {
         var client = GetRequiredService<IAzureSearchClientFactory>().GetSearchIndexClient();
 
