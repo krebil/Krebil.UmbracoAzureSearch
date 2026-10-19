@@ -22,12 +22,17 @@ internal sealed class FakeSearchService : HttpMessageHandler
 
     /// <summary>Report <see cref="UnknownField"/> for every search, whether the search names it or not.</summary>
     public bool UnknownFieldAlways { get; set; }
-    // Extra configuration, e.g. ["UmbracoAzureSearch:Suggestions:my-index:Enabled"] = "false".
+
+    /// <summary>Extra configuration, e.g. <c>["UmbracoAzureSearch:Suggestions:my-index:Enabled"] = "false"</c>.</summary>
     public Dictionary<string, string?> Settings { get; } = [];
 
-    // Answers a request before the defaults; return null to fall through.
+    /// <summary>Answers a request before the defaults; returning null falls through to them.</summary>
     public Func<HttpRequestMessage, HttpResponseMessage?>? Respond { get; set; }
 
+    /// <summary>Awaited before each request is answered, e.g. to hold requests until others arrive.</summary>
+    public Func<HttpRequestMessage, Task>? BeforeRespond { get; set; }
+
+    /// <summary>Everything the services logged.</summary>
     public List<(LogLevel Level, string Message)> Logs { get; } = [];
 
     public IServiceProvider CreateServices(ServerRole serverRole = ServerRole.Single)
@@ -56,7 +61,11 @@ internal sealed class FakeSearchService : HttpMessageHandler
 
     public JsonElement LastSearchBody()
     {
-        var body = Requests.Last(r => r.Path.Contains("search.post.search")).Body;
+        string? body;
+        lock (Requests)
+        {
+            body = Requests.Last(r => r.Path.Contains("search.post.search")).Body;
+        }
         Assert.That(body, Is.Not.Null);
         return JsonDocument.Parse(body!).RootElement;
     }
@@ -66,12 +75,22 @@ internal sealed class FakeSearchService : HttpMessageHandler
 
     public JsonElement LastAutocompleteBody()
     {
-        var body = Requests.Last(r => r.Path.Contains("search.post.autocomplete")).Body;
+        string? body;
+        lock (Requests)
+        {
+            body = Requests.Last(r => r.Path.Contains("search.post.autocomplete")).Body;
+        }
         Assert.That(body, Is.Not.Null);
         return JsonDocument.Parse(body!).RootElement;
     }
 
-    public bool SentAutocomplete() => Requests.Any(r => r.Path.Contains("search.post.autocomplete"));
+    public bool SentAutocomplete()
+    {
+        lock (Requests)
+        {
+            return Requests.Any(r => r.Path.Contains("search.post.autocomplete"));
+        }
+    }
 
     public static HttpResponseMessage Json(string json, HttpStatusCode status = HttpStatusCode.OK)
         => new(status) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
@@ -89,6 +108,9 @@ internal sealed class FakeSearchService : HttpMessageHandler
         {
             Requests.Add((request.Method, request.RequestUri!.AbsolutePath, body));
         }
+
+        if (BeforeRespond is not null)
+            await BeforeRespond(request);
 
         if (Respond?.Invoke(request) is { } response)
             return response;
