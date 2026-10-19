@@ -94,7 +94,61 @@ public class MySearchService(IAzureSearchSearcher searcher)
 }
 ```
 
+## Suggestions
+
+Pass `maxSuggestions` to get suggested next queries for a search box. Each suggestion is the typed query with its last word completed, so `"red bo"` can give `"red boat"` and `"red board"`. Suggestions come back in the same response as the results.
+
+```csharp
+[ApiController]
+[Route("api/search")]
+public class SearchController(IAzureSearchSearcher searcher) : ControllerBase
+{
+    [HttpGet]
+    public async Task<IActionResult> Get(string query)
+    {
+        var result = await searcher.SearchAsync(
+            indexAlias: SearchConstants.IndexAliases.PublishedContent,
+            query: query,
+            maxSuggestions: 5);
+
+        return Ok(new { result.Total, suggestions = result.Suggestions ?? [] });
+    }
+}
+```
+
+- Suggestions are lowercase.
+- `Suggestions` is `null` when there are none: `maxSuggestions` is 0, the query is blank, or nothing matches. Handle `null`, not only an empty list.
+- Suggestions use the same culture, segment, protected-content and filter rules as the results, except text filters (see the limitations below).
+- The Delivery API and the backoffice do not ask for suggestions, so only your own code triggers the extra request.
+
+By default every index suggests from its highest-relevance texts, such as content names. Configure an index under its alias to change that:
+
+```json
+{
+  "UmbracoAzureSearch": {
+    "Suggestions": {
+      "Umb_PublishedContent": {
+        "Fields": [ "title", "subtitle" ]
+      },
+      "Umb_Members": {
+        "Enabled": false
+      }
+    }
+  }
+}
+```
+
+| Setting | Default | Effect |
+|---|---|---|
+| `Enabled` | `true` | `false` gives the index no suggestions and saves the index space. |
+| `Fields` | Highest-relevance texts | The Umbraco fields whose texts feed suggestions. |
+
+### Upgrading
+
+Existing indexes get suggestions added on startup when `EnsureIndicesOnStartup()` is registered, but their existing content has no suggestions yet. Rebuild each index in the backoffice to fill them. A rebuild also adds suggestions to an index on sites that do not ensure indexes on startup.
+
 ## Azure AI Search limitations
 
 - **No guaranteed ordering without an explicit sort** — always provide a sorter when result order matters.
 - **No multiple facet types on the same field** — e.g. `IntegerExactFacet` and `IntegerRangeFacet` cannot both be applied to the same field in a single query. The provider works around this internally by running a separate query per field, so mixed facet types across different fields work fine.
+- **Text filters do not narrow suggestions** — Azure rejects them in suggestion requests, so suggestions ignore `TextFilter`. Suggestions still respect the culture, segment, protected-content and all other filters.
