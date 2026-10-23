@@ -23,7 +23,7 @@ internal sealed class FakeSearchService : HttpMessageHandler
     /// <summary>Report <see cref="UnknownField"/> for every search, whether the search names it or not.</summary>
     public bool UnknownFieldAlways { get; set; }
 
-    /// <summary>Extra configuration, e.g. <c>["UmbracoAzureSearch:Suggestions:my-index:Enabled"] = "false"</c>.</summary>
+    /// <summary>Extra configuration, e.g. <c>["UmbracoAzureSearch:Indexes:my-index:Suggestions:Enabled"] = "false"</c>.</summary>
     public Dictionary<string, string?> Settings { get; } = [];
 
     /// <summary>Answers a request before the defaults; returning null falls through to them.</summary>
@@ -34,6 +34,9 @@ internal sealed class FakeSearchService : HttpMessageHandler
 
     /// <summary>Everything the services logged.</summary>
     public List<(LogLevel Level, string Message)> Logs { get; } = [];
+
+    /// <summary>Extra registrations, e.g. <c>ConfigureAzureSearchIndex</c> calls. Runs after <c>AddUmbracoAzureSearch</c>.</summary>
+    public Action<IServiceCollection>? ConfigureServices { get; set; }
 
     public IServiceProvider CreateServices(ServerRole serverRole = ServerRole.Single)
     {
@@ -46,11 +49,12 @@ internal sealed class FakeSearchService : HttpMessageHandler
             .AddInMemoryCollection(Settings)
             .Build();
 
-        var services = new ServiceCollection()
+        var serviceCollection = new ServiceCollection()
             .AddLogging(logging => logging.AddProvider(new RecordingLoggerProvider(Logs)))
             .AddSingleton<IServerRoleAccessor>(new FixedServerRoleAccessor(serverRole))
-            .AddUmbracoAzureSearch(configuration)
-            .BuildServiceProvider();
+            .AddUmbracoAzureSearch(configuration);
+        ConfigureServices?.Invoke(serviceCollection);
+        var services = serviceCollection.BuildServiceProvider();
         ((AzureSearchClientFactory)services.GetRequiredService<IAzureSearchClientFactory>()).Transport =
             new HttpClientTransport(new HttpClient(this));
         return services;
