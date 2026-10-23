@@ -4,7 +4,7 @@
 
 Use term suggestions to complete the last word of a query in a search box. Suggestions are on by default for every index.
 
-Needs a rebuild: yes, to fill suggestions for content that was indexed before version 17.3.0. See [Upgrading](#upgrading).
+Needs a rebuild: yes, to fill suggestions for content that was indexed before version 17.3.0 or 18.2.0. See [Upgrading](#upgrading).
 
 ## Term suggestions
 

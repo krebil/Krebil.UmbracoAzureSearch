@@ -108,9 +108,9 @@ public class MySearchService(IAzureSearchSearcher searcher)
 
 ## Features
 
-- [Suggestions](https://github.com/krebil/Krebil.UmbracoAzureSearch/blob/v17/docs/suggestions.md): complete the last word of a query for a search box.
-- [Azure AI Search limitations](https://github.com/krebil/Krebil.UmbracoAzureSearch/blob/v17/docs/limitations.md): Azure limits that change how some Umbraco Search features behave.
+- [Suggestions](https://github.com/krebil/Krebil.UmbracoAzureSearch/blob/main/docs/suggestions.md): complete the last word of a query for a search box.
+- [Azure AI Search limitations](https://github.com/krebil/Krebil.UmbracoAzureSearch/blob/main/docs/limitations.md): Azure limits that change how some Umbraco Search features behave.
 
 ## Upgrading
 
-Read the [upgrade guide](https://github.com/krebil/Krebil.UmbracoAzureSearch/blob/v17/docs/upgrading.md) before you update the package.
+Read the [upgrade guide](https://github.com/krebil/Krebil.UmbracoAzureSearch/blob/main/docs/upgrading.md) before you update the package.

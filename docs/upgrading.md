@@ -32,7 +32,7 @@ None yet.
 
 | Change | Rebuild |
 |---|---|
-| Upgrade from a version before 17.3.0 to get term suggestions | Yes, to fill suggestions for existing content. See [Suggestions](suggestions.md#upgrading). |
+| Upgrade from a version before 17.3.0 or 18.2.0 to get term suggestions | Yes, to fill suggestions for existing content. See [Suggestions](suggestions.md#upgrading). |
 
 ## Upgrade order
 
