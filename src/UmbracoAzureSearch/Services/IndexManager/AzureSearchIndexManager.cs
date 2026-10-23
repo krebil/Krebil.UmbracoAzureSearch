@@ -16,6 +16,7 @@ public class AzureSearchIndexManager(
     IIndexAliasResolver indexAliasResolver,
     IAzureSearchClientFactory azureSearchClientFactory,
     IOptions<UmbracoAzureSearchOptions> azureSearchOptions,
+    IOptionsMonitor<AzureSearchIndexOptions> azureSearchIndexOptions,
     ILogger<AzureSearchIndexManager> logger)
     : UmbracoAzureServiceBase(serverRoleAccessor), IAzureSearchIndexManager
 {
@@ -42,7 +43,7 @@ public class AzureSearchIndexManager(
                 indexNames.Add(existingIndexName);
             }
         }
-        var suggestionOptions = azureSearchOptions.Value.GetSuggestionOptions(umbracoIndexAlias);
+        var suggestionOptions = azureSearchIndexOptions.Get(umbracoIndexAlias).Suggestions;
         if (indexNames.Contains(indexAlias))
         {
             if (suggestionOptions.Enabled)
@@ -60,7 +61,7 @@ public class AzureSearchIndexManager(
         if (ShouldNotManipulateIndexes())
             return;
         var indexClient = azureSearchClientFactory.GetSearchIndexClient();
-        var suggestionOptions = azureSearchOptions.Value.GetSuggestionOptions(indexAlias);
+        var suggestionOptions = azureSearchIndexOptions.Get(indexAlias).Suggestions;
         indexAlias = indexAliasResolver.Resolve(indexAlias);
         var index = await indexClient.GetIndexAsync(indexAlias);
         index.ThrowIfNull();

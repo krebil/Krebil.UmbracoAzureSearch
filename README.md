@@ -33,17 +33,17 @@ Add your Azure AI Search credentials to `appsettings.json`:
 }
 ```
 
-For a serverless Azure AI Search service, also set `IsServerless`:
+For a serverless Azure AI Search service, also set `Serverless`:
 
 ```json
 {
   "UmbracoAzureSearch": {
-    "IsServerless": true
+    "Serverless": true
   }
 }
 ```
 
-The key is `IsServerless`. A `Serverless` key has no effect.
+The package also reads the older key `IsServerless`. When both keys are set, `IsServerless` wins.
 
 ### Microsoft Entra ID (managed identity)
 
@@ -70,7 +70,7 @@ public sealed class SearchComposer : IComposer
 }
 ```
 
-`AddUmbracoAzureSearch` registers the four default Umbraco Search indexes (`Umb_Content`, `Umb_PublishedContent`, `Umb_Media` and `Umb_Members`) against Azure AI Search. To change one of them or add your own, configure `IndexOptions` after this call; the last registration for an alias wins.
+`AddUmbracoAzureSearch` registers the four default Umbraco Search indexes (`Umb_Content`, `Umb_PublishedContent`, `Umb_Media` and `Umb_Members`) against Azure AI Search. To change one of them or add your own, configure `IndexOptions` after this call; the last registration for an alias wins. To change the Azure settings of an index, see [Index configuration](https://github.com/krebil/Krebil.UmbracoAzureSearch/blob/main/docs/index-configuration.md).
 
 ## Usage
 
@@ -108,6 +108,7 @@ public class MySearchService(IAzureSearchSearcher searcher)
 
 ## Features
 
+- [Index configuration](https://github.com/krebil/Krebil.UmbracoAzureSearch/blob/main/docs/index-configuration.md): settings per index, from appsettings or code.
 - [Suggestions](https://github.com/krebil/Krebil.UmbracoAzureSearch/blob/main/docs/suggestions.md): complete the last word of a query for a search box.
 - [Azure AI Search limitations](https://github.com/krebil/Krebil.UmbracoAzureSearch/blob/main/docs/limitations.md): Azure limits that change how some Umbraco Search features behave.
 
