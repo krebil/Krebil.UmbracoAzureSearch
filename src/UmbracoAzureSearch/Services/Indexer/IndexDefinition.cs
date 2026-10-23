@@ -17,7 +17,7 @@ internal sealed record ResolvedField(
 /// </summary>
 internal sealed class IndexDefinition(AzureSearchIndexOptions options)
 {
-    // An automatic field keeps the attributes Krebil always gave it: searchable texts, filterable and facetable values, sortable.
+    // An automatic field keeps the attributes the package always gave it: searchable texts, filterable and facetable values, sortable.
     private static readonly ResolvedField Automatic = new(true, true, true, true, false, null);
 
     public AzureSearchIndexOptions Options { get; } = options;
