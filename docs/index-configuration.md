@@ -40,7 +40,7 @@ builder.Services.ConfigureAzureSearchIndex("Umb_PublishedContent", index => inde
 
 ## Order
 
-Krebil applies appsettings first, then code. When both set the same value, code wins. The order does not depend on where you call `ConfigureAzureSearchIndex`, before or after `AddUmbracoAzureSearch`.
+The package applies appsettings first, then code. When both set the same value, code wins. The order does not depend on where you call `ConfigureAzureSearchIndex`, before or after `AddUmbracoAzureSearch`.
 
 A value that code does not set keeps its appsettings value. Several `ConfigureAzureSearchIndex` calls for one alias run in registration order.
 
@@ -61,7 +61,7 @@ The appsettings keys are relative to `UmbracoAzureSearch:Indexes:<alias>`.
 
 ## Validation
 
-Krebil checks the configuration when the application starts. An error stops startup. One exception lists every error.
+The package checks the configuration when the application starts. An error stops startup. One exception lists every error.
 
 | Check | Example error |
 |---|---|
