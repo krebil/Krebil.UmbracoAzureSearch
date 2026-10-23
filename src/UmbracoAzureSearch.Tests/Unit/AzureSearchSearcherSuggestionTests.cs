@@ -177,7 +177,7 @@ public class AzureSearchSearcherSuggestionTests
     public async Task DoesNotAskForSuggestionsWhenTheyAreDisabledForTheIndex()
     {
         var service = new FakeSearchService();
-        service.Settings[$"UmbracoAzureSearch:Suggestions:{IndexAlias}:Enabled"] = "false";
+        service.Settings[$"UmbracoAzureSearch:Indexes:{IndexAlias}:Suggestions:Enabled"] = "false";
 
         var result = await service.CreateSearcher().SearchAsync(IndexAlias, query: "re", maxSuggestions: 5);
 

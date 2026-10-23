@@ -27,7 +27,7 @@ namespace UmbracoAzureSearch.Services.Searcher;
 public class AzureSearchSearcher(
     IServerRoleAccessor serverRoleAccessor,
     IAzureSearchClientFactory azureSearchClientFactory,
-    IOptions<UmbracoAzureSearchOptions> azureSearchOptions,
+    IOptionsMonitor<AzureSearchIndexOptions> azureSearchIndexOptions,
     ILogger<AzureSearchSearcher> logger)
     : UmbracoAzureServiceBase(serverRoleAccessor), IAzureSearchSearcher
 {
@@ -303,7 +303,7 @@ public class AzureSearchSearcher(
             ? Task.FromResult<Response<SearchResults<SearchDocument>>?>(null)
             : SearchOrNullAsync(searchClient, searchText, facetSearchOptions);
         var suggestionsTask = GetSuggestionsAsync(
-            searchClient, indexAlias, query, maxSuggestions, suggestionFilterClauses, azureSearchOptions.Value.GetSuggestionOptions(indexAlias));
+            searchClient, indexAlias, query, maxSuggestions, suggestionFilterClauses, azureSearchIndexOptions.Get(indexAlias).Suggestions);
         await Task.WhenAll(mainSearchTask, facetSearchTask, suggestionsTask);
 
         var result = await mainSearchTask;

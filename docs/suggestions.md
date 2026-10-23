@@ -33,27 +33,41 @@ public class SearchController(IAzureSearchSearcher searcher) : ControllerBase
 - Suggestions use the same culture, segment, protected-content and filter rules as the results, except text filters (see the limitations below).
 - The Delivery API and the backoffice do not ask for suggestions, so only your own code triggers the extra request.
 
-By default every index suggests from its highest-relevance texts, such as content names. Configure an index under its alias to change that:
+By default every index suggests from its highest-relevance texts, such as content names. Configure an index under its alias to change that. The settings are part of the [index configuration](index-configuration.md).
 
 ```json
 {
   "UmbracoAzureSearch": {
-    "Suggestions": {
+    "Indexes": {
       "Umb_PublishedContent": {
-        "Fields": [ "title", "subtitle" ]
+        "Suggestions": {
+          "Fields": [ "title", "subtitle" ]
+        }
       },
       "Umb_Members": {
-        "Enabled": false
+        "Suggestions": {
+          "Enabled": false
+        }
       }
     }
   }
 }
 ```
 
-| Setting | Default | Effect |
-|---|---|---|
-| `Enabled` | `true` | `false` gives the index no suggestions and saves the index space. |
-| `Fields` | Highest-relevance texts | The Umbraco fields whose texts feed suggestions. |
+```csharp
+builder.Services
+    .ConfigureAzureSearchIndex("Umb_PublishedContent", index => index.SuggestionFields("title", "subtitle"))
+    .ConfigureAzureSearchIndex("Umb_Members", index => index.Suggestions(false));
+```
+
+When appsettings and code set the same value, code wins.
+
+| Setting | Builder method | Default | Effect |
+|---|---|---|---|
+| `Enabled` | `.Suggestions(bool)` | `true` | `false` gives the index no suggestions and saves the index space. |
+| `Fields` | `.SuggestionFields(params string[])` | Highest-relevance texts | The Umbraco fields whose texts feed suggestions. |
+
+The settings used to be under `UmbracoAzureSearch:Suggestions:<alias>`. The package still reads that location and logs a warning. See [Settings that move](upgrading.md#settings-that-move).
 
 ### Upgrading
 
