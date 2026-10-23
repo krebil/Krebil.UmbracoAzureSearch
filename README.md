@@ -70,7 +70,7 @@ public sealed class SearchComposer : IComposer
 }
 ```
 
-`AddUmbracoAzureSearch` registers the four default Umbraco Search indexes (`Umb_Content`, `Umb_PublishedContent`, `Umb_Media` and `Umb_Members`) against Azure AI Search. To change one of them or add your own, configure `IndexOptions` after this call; the last registration for an alias wins.
+`AddUmbracoAzureSearch` registers the four default Umbraco Search indexes (`Umb_Content`, `Umb_PublishedContent`, `Umb_Media` and `Umb_Members`) against Azure AI Search. To change one of them or add your own, configure `IndexOptions` after this call; the last registration for an alias wins. To change the Azure settings of an index, see [Index configuration](https://github.com/krebil/Krebil.UmbracoAzureSearch/blob/v17/docs/index-configuration.md).
 
 ## Usage
 
@@ -108,6 +108,7 @@ public class MySearchService(IAzureSearchSearcher searcher)
 
 ## Features
 
+- [Index configuration](https://github.com/krebil/Krebil.UmbracoAzureSearch/blob/v17/docs/index-configuration.md): settings per index, from appsettings or code.
 - [Suggestions](https://github.com/krebil/Krebil.UmbracoAzureSearch/blob/v17/docs/suggestions.md): complete the last word of a query for a search box.
 - [Azure AI Search limitations](https://github.com/krebil/Krebil.UmbracoAzureSearch/blob/v17/docs/limitations.md): Azure limits that change how some Umbraco Search features behave.
 

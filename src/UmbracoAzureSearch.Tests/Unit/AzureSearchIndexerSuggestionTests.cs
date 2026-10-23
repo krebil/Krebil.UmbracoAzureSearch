@@ -43,7 +43,7 @@ public class AzureSearchIndexerSuggestionTests
     public async Task FillsSuggestionsFromAllTextsOfTheConfiguredFields()
     {
         var service = new FakeSearchService();
-        service.Settings[$"UmbracoAzureSearch:Suggestions:{IndexAlias}:Fields:0"] = "title";
+        service.Settings[$"UmbracoAzureSearch:Indexes:{IndexAlias}:Suggestions:Fields:0"] = "title";
 
         var documents = await IndexAsync(
             service,
@@ -85,7 +85,7 @@ public class AzureSearchIndexerSuggestionTests
     public async Task DoesNotFillSuggestionsWhenTheyAreDisabledForTheIndex()
     {
         var service = new FakeSearchService();
-        service.Settings[$"UmbracoAzureSearch:Suggestions:{IndexAlias}:Enabled"] = "false";
+        service.Settings[$"UmbracoAzureSearch:Indexes:{IndexAlias}:Suggestions:Enabled"] = "false";
 
         var documents = await IndexAsync(
             service,

@@ -1,7 +1,7 @@
 namespace UmbracoAzureSearch.Models;
 
 /// <summary>
-/// Suggestion settings for one index alias, under <c>UmbracoAzureSearch:Suggestions:&lt;alias&gt;</c>.
+/// Suggestion settings for one index alias, under <c>UmbracoAzureSearch:Indexes:&lt;alias&gt;:Suggestions</c>.
 /// </summary>
 public class SuggestionOptions
 {

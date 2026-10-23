@@ -2,6 +2,7 @@ using Azure.Core;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using UmbracoAzureSearch.Configuration;
 using Throw;
 using Umbraco.Cms.Core.DependencyInjection;
 using Umbraco.Cms.Core.Models;
@@ -44,6 +45,10 @@ public static class ServiceCollectionExtensions
             .AddSingleton<IAzureSearchIndexManager, AzureSearchIndexManager>()
             .AddSingleton<IAzureSearchIndexer, AzureSearchIndexer>()
             .AddSingleton<DocumentMapper>()
+            .AddSingleton(sp => new AzureSearchIndexConfigurationSources(
+                configuration, sp.GetServices<AzureSearchIndexCodeConfiguration>()))
+            .AddSingleton<IConfigureOptions<AzureSearchIndexOptions>, ConfigureAzureSearchIndexOptions>()
+            .AddHostedService<AzureSearchIndexStartupCheck>()
             .AddTransient<IAzureSearchSearcher, AzureSearchSearcher>();
         
         services.AddSingleton<ISearcher, AzureSearchSearcher>();
@@ -64,6 +69,17 @@ public static class ServiceCollectionExtensions
         });
 
         return services;
+    }
+
+    /// <summary>
+    /// Sets the options of one index in code. Runs after <c>UmbracoAzureSearch:Indexes:&lt;alias&gt;</c> in appsettings,
+    /// so a value set here wins. Several calls for one alias run in registration order.
+    /// </summary>
+    public static IServiceCollection ConfigureAzureSearchIndex(this IServiceCollection services, string indexAlias, Action<AzureSearchIndexBuilder> configure)
+    {
+        indexAlias.ThrowIfNull().IfEmpty().IfWhiteSpace();
+        configure.ThrowIfNull();
+        return services.AddSingleton(new AzureSearchIndexCodeConfiguration(indexAlias, configure));
     }
 
     public static IUmbracoBuilder EnsureIndicesOnStartup(this IUmbracoBuilder builder)
