@@ -109,6 +109,7 @@ public class MySearchService(IAzureSearchSearcher searcher)
 ## Features
 
 - [Index configuration](https://github.com/krebil/Krebil.UmbracoAzureSearch/blob/main/docs/index-configuration.md): settings per index, from appsettings or code.
+- [Index definition](https://github.com/krebil/Krebil.UmbracoAzureSearch/blob/main/docs/index-definition.md): choose the content, fields and field attributes of an index.
 - [Suggestions](https://github.com/krebil/Krebil.UmbracoAzureSearch/blob/main/docs/suggestions.md): complete the last word of a query for a search box.
 - [Azure AI Search limitations](https://github.com/krebil/Krebil.UmbracoAzureSearch/blob/main/docs/limitations.md): Azure limits that change how some Umbraco Search features behave.
 

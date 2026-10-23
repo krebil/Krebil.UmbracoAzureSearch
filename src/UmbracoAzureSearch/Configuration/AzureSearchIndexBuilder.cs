@@ -1,3 +1,4 @@
+using Umbraco.Cms.Search.Core.Services.ContentIndexing;
 using UmbracoAzureSearch.Models;
 
 namespace UmbracoAzureSearch.Configuration;
@@ -22,6 +23,92 @@ public sealed class AzureSearchIndexBuilder
     public AzureSearchIndexBuilder SuggestionFields(params string[] fields)
     {
         _options.Suggestions.Fields = fields;
+        return this;
+    }
+
+    /// <summary>Writes every field (on, the default) or only the opted-in fields (off). Same as <c>AutomaticFields</c>.</summary>
+    public AzureSearchIndexBuilder AutomaticFields(bool enabled)
+    {
+        _options.AutomaticFields = enabled;
+        return this;
+    }
+
+    /// <summary>Opts in a field and sets its attributes. Same as <c>Fields:&lt;field&gt;</c>; attributes set here win.</summary>
+    public AzureSearchIndexBuilder Field(string fieldName, Action<AzureSearchFieldBuilder>? configure = null)
+    {
+        if (!_options.Fields.TryGetValue(fieldName, out var field))
+        {
+            field = new FieldOptions();
+            _options.Fields[fieldName] = field;
+        }
+
+        configure?.Invoke(new AzureSearchFieldBuilder(field));
+        return this;
+    }
+
+    /// <summary>Holds only documents of these content types (document, media or member type aliases). Code only.</summary>
+    public AzureSearchIndexBuilder ContentTypes(params string[] contentTypeAliases)
+    {
+        _options.ContentTypes = contentTypeAliases;
+        return this;
+    }
+
+    /// <summary>
+    /// Holds only these cultures, plus invariant documents. A key matches the culture or its language part,
+    /// so <c>pt</c> holds <c>pt-BR</c> and <c>pt-PT</c>. Code only.
+    /// </summary>
+    public AzureSearchIndexBuilder Cultures(params string[] cultures)
+    {
+        _options.Cultures = cultures;
+        return this;
+    }
+
+    /// <summary>
+    /// Runs an <see cref="IContentIndexer"/> for this index only. Do not also register it as <see cref="IContentIndexer"/>,
+    /// or it runs for every index. Krebil resolves it from the container, or creates it with its dependencies. Code only.
+    /// </summary>
+    public AzureSearchIndexBuilder Indexer<TIndexer>() where TIndexer : class, IContentIndexer
+    {
+        if (!_options.Indexers.Contains(typeof(TIndexer)))
+        {
+            _options.Indexers = [.. _options.Indexers, typeof(TIndexer)];
+        }
+
+        return this;
+    }
+}
+
+/// <summary>Sets the attributes of one opted-in field.</summary>
+public sealed class AzureSearchFieldBuilder
+{
+    private readonly FieldOptions _field;
+
+    internal AzureSearchFieldBuilder(FieldOptions field) => _field = field;
+
+    /// <summary>The texts of the field are searchable, and feed the free-text query on all fields.</summary>
+    public AzureSearchFieldBuilder Searchable(bool value = true) => Set(() => _field.Searchable = value);
+
+    /// <summary>The values of the field can be used in filters.</summary>
+    public AzureSearchFieldBuilder Filterable(bool value = true) => Set(() => _field.Filterable = value);
+
+    /// <summary>The values of the field can be used in facets.</summary>
+    public AzureSearchFieldBuilder Facetable(bool value = true) => Set(() => _field.Facetable = value);
+
+    /// <summary>The field can be used to sort results.</summary>
+    public AzureSearchFieldBuilder Sortable(bool value = true) => Set(() => _field.Sortable = value);
+
+    /// <summary>The texts of the field feed suggestions. Needs <see cref="Searchable"/>.</summary>
+    public AzureSearchFieldBuilder Suggestable(bool value = true) => Set(() => _field.Suggestable = value);
+
+    /// <summary>The Azure analyzer of the searchable texts, e.g. <c>en.microsoft</c>.</summary>
+    public AzureSearchFieldBuilder Analyzer(string analyzerName) => Set(() => _field.Analyzer = analyzerName);
+
+    /// <summary>The relevance boost of the field. Stored for scoring profiles; it has no effect yet.</summary>
+    public AzureSearchFieldBuilder Boost(double boost) => Set(() => _field.Boost = boost);
+
+    private AzureSearchFieldBuilder Set(Action set)
+    {
+        set();
         return this;
     }
 }

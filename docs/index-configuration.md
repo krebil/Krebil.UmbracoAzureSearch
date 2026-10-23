@@ -48,7 +48,7 @@ Index aliases match in any case. `umb_publishedcontent` configures `Umb_Publishe
 
 ## Code-only settings
 
-None yet. Later versions add settings that need types, such as per-index indexers.
+Content types, cultures and per-index indexers need types and logic, so only code sets them. See [Index definition](index-definition.md).
 
 ## Settings
 
@@ -56,8 +56,19 @@ None yet. Later versions add settings that need types, such as per-index indexer
 |---|---|---|---|---|---|
 | Suggestions on or off | `Suggestions:Enabled` | `.Suggestions(bool)` | `true` | Yes, to fill suggestions after turning them on | [Suggestions](suggestions.md) |
 | Suggestion fields | `Suggestions:Fields` | `.SuggestionFields(params string[])` | Highest-relevance texts | Yes | [Suggestions](suggestions.md) |
+| Automatic fields | `AutomaticFields` | `.AutomaticFields(bool)` | `true` | Yes, to turn it off on an existing index | [Index definition](index-definition.md) |
+| Opted-in fields and attributes | `Fields:<field>` | `.Field("<field>", f => ...)` | None | Yes, to change an attribute of an existing field | [Index definition](index-definition.md) |
+| Content types | Code only | `.ContentTypes(params string[])` | Every content type | Yes | [Index definition](index-definition.md) |
+| Cultures | Code only | `.Cultures(params string[])` | Every culture | Yes | [Index definition](index-definition.md) |
+| Per-index indexers | Code only | `.Indexer<TIndexer>()` | None | Yes, to fill existing content | [Index definition](index-definition.md) |
 
 The appsettings keys are relative to `UmbracoAzureSearch:Indexes:<alias>`.
+
+One setting applies to the whole service, not to one index:
+
+| Setting | appsettings key | Default | Docs |
+|---|---|---|---|
+| Field limit of the service | `UmbracoAzureSearch:MaxFieldsPerIndex` | `1000` | [Field budget](index-definition.md#field-budget) |
 
 ## Validation
 
@@ -66,6 +77,8 @@ Krebil checks the configuration when the application starts. An error stops star
 | Check | Example error |
 |---|---|
 | The alias is registered with Umbraco Search | `UmbracoAzureSearch:Indexes:Umb_PublishedContnet configures the index "Umb_PublishedContnet", but Umbraco Search does not register an index with that alias. Registered content indexes: Umb_Content, Umb_Media, Umb_Members, Umb_PublishedContent.` |
+
+The [index definition](index-definition.md#validation) adds checks for fields.
 
 The check applies to both sources. For an alias in code, the error starts with `ConfigureAzureSearchIndex("<alias>")`.
 
