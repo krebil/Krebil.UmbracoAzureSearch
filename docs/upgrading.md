@@ -52,19 +52,19 @@ After:
 }
 ```
 
-Krebil reads the old location in versions 17.4 and 18.3 and logs a warning at startup that names the old key and the new key. Versions 17.5 and 18.4 stop reading it.
+The package reads the old location in versions 17.4 and 18.3 and logs a warning at startup that names the old key and the new key. Versions 17.5 and 18.4 stop reading it.
 
-When both locations are set for an index, Krebil uses the new location and ignores the old one as a whole. The warning names the ignored old key.
+When both locations are set for an index, the package uses the new location and ignores the old one as a whole. The warning names the ignored old key.
 
 `UmbracoAzureSearchOptions.Suggestions` and `UmbracoAzureSearchOptions.GetSuggestionOptions` are obsolete. Use `ConfigureAzureSearchIndex` to set suggestions in code, and `IOptionsMonitor<AzureSearchIndexOptions>.Get(alias).Suggestions` to read them.
 
 ### Serverless
 
-Krebil now reads `UmbracoAzureSearch:Serverless`. Before, only `UmbracoAzureSearch:IsServerless` worked, and a `Serverless` key had no effect. Both keys work now. When both are set, `IsServerless` wins. A site that set `Serverless: true` and saw errors on a serverless service now works without a change.
+The package now reads `UmbracoAzureSearch:Serverless`. Before, only `UmbracoAzureSearch:IsServerless` worked, and a `Serverless` key had no effect. Both keys work now. When both are set, `IsServerless` wins. A site that set `Serverless: true` and saw errors on a serverless service now works without a change.
 
 ## New startup validation
 
-Krebil checks the [index configuration](index-configuration.md#validation) at startup. A configuration that worked before can now stop startup:
+The package checks the [index configuration](index-configuration.md#validation) at startup. A configuration that worked before can now stop startup:
 
 - An alias under `UmbracoAzureSearch:Indexes`, or in `ConfigureAzureSearchIndex`, that Umbraco Search does not register. A typo in an alias is the usual cause. The old `Suggestions` location is not checked.
 - A field that is suggestable but not searchable.
