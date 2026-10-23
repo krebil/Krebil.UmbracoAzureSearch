@@ -35,6 +35,16 @@ public class DocumentMapper
         IEnumerable<IndexField> fields,
         ContentProtection? protection,
         SuggestionOptions suggestionOptions)
+        => MapToDocuments(id, objectType, variations, fields, protection,
+            new IndexDefinition(new AzureSearchIndexOptions { Suggestions = suggestionOptions }));
+
+    internal MappingResult MapToDocuments(
+        Guid id,
+        UmbracoObjectTypes objectType,
+        IEnumerable<Variation> variations,
+        IEnumerable<IndexField> fields,
+        ContentProtection? protection,
+        IndexDefinition definition)
     {
         var fieldsByFieldName = fields.GroupBy(field => field.FieldName);
         var allFieldMappings = new List<IndexFieldMapping>();
@@ -48,7 +58,7 @@ public class DocumentMapper
                 variation,
                 fieldsByFieldName,
                 protection,
-                suggestionOptions);
+                definition);
 
             documents.Add(document);
             allFieldMappings.AddRange(variationMappings);
@@ -73,7 +83,7 @@ public class DocumentMapper
         Variation variation,
         IEnumerable<IGrouping<string, IndexField>> fieldsByFieldName,
         ContentProtection? protection,
-        SuggestionOptions suggestionOptions)
+        IndexDefinition definition)
     {
         // document variation
         var culture = variation.Culture.IndexCulture();
@@ -146,22 +156,30 @@ public class DocumentMapper
             })
             .ToArray();
 
-        // all text fields for "free text query on all fields"
-        var allTexts = variationFields
+        // the index definition decides which fields are in the index and their attributes
+        var resolvedFields = variationFields
+            .Select(field => (Field: field, Resolved: definition.Resolve(field.FieldName)))
+            .Where(f => f.Resolved is not null)
+            .Select(f => (f.Field, Resolved: f.Resolved!))
+            .ToArray();
+        var searchableFields = resolvedFields.Where(f => f.Resolved.Searchable).Select(f => f.Field).ToArray();
+
+        // all searchable text fields for "free text query on all fields"
+        var allTexts = searchableFields
             .SelectMany(field => field.Value.Texts ?? [])
             .ToArray();
-        var allTextsR1 = variationFields
+        var allTextsR1 = searchableFields
             .SelectMany(field => field.Value.TextsR1 ?? [])
             .ToArray();
-        var allTextsR2 = variationFields
+        var allTextsR2 = searchableFields
             .SelectMany(field => field.Value.TextsR2 ?? [])
             .ToArray();
-        var allTextsR3 = variationFields
+        var allTextsR3 = searchableFields
             .SelectMany(field => field.Value.TextsR3 ?? [])
             .ToArray();
 
         // explicit document field values - using intermediary mappings
-        var fieldMappings = CreateFieldMappings(variationFields).ToList();
+        var fieldMappings = resolvedFields.SelectMany(f => CreateFieldMappings(f.Field, f.Resolved)).ToList();
 
         var document = new SearchDocument()
         {
@@ -177,9 +195,9 @@ public class DocumentMapper
             [IndexConstants.FieldNames.AllTextsR3] = allTextsR3,
         };
 
-        if (suggestionOptions.Enabled)
+        if (definition.Options.Suggestions.Enabled)
         {
-            var suggestionTexts = SuggestionTexts(variationFields, allTextsR1, suggestionOptions);
+            var suggestionTexts = SuggestionTexts(resolvedFields, allTextsR1, definition.Options.Suggestions);
             document[IndexConstants.FieldNames.Suggestion] = suggestionTexts.Length > 0
                 ? string.Join(" ", suggestionTexts)
                 : null;
@@ -195,14 +213,19 @@ public class DocumentMapper
         return (document, fieldMappings);
     }
 
-    // The configured fields with all their texts, or by default every highest-relevance (R1) text.
-    private static string[] SuggestionTexts(IndexField[] variationFields, string[] allTextsR1, SuggestionOptions suggestionOptions)
+    // The configured and suggestable fields with all their texts, or by default every searchable highest-relevance (R1) text.
+    private static string[] SuggestionTexts(
+        (IndexField Field, ResolvedField Resolved)[] resolvedFields, string[] allTextsR1, SuggestionOptions suggestionOptions)
     {
-        if (suggestionOptions.Fields is not { Length: > 0 } fieldNames)
+        var fieldNames = suggestionOptions.Fields ?? [];
+        var suggestionFields = resolvedFields
+            .Where(f => f.Resolved.Suggestable || fieldNames.Contains(f.Field.FieldName, StringComparer.OrdinalIgnoreCase))
+            .Select(f => f.Field)
+            .ToArray();
+        if (suggestionFields.Length == 0 && fieldNames.Length == 0 && !resolvedFields.Any(f => f.Resolved.Suggestable))
             return allTextsR1;
 
-        return variationFields
-            .Where(field => fieldNames.Contains(field.FieldName, StringComparer.OrdinalIgnoreCase))
+        return suggestionFields
             .SelectMany(field => (field.Value.Texts ?? [])
                 .Concat(field.Value.TextsR1 ?? [])
                 .Concat(field.Value.TextsR2 ?? [])
@@ -210,211 +233,103 @@ public class DocumentMapper
             .ToArray();
     }
 
-    private IEnumerable<IndexFieldMapping> CreateFieldMappings(IndexField[] variationFields)
+    // The physical fields of one Umbraco field. Texts become four text fields (all levels, then R1 to R3), other values
+    // one collection per value type, and each value type gets a single-value "_sort" field when the field is sortable.
+    private static IEnumerable<IndexFieldMapping> CreateFieldMappings(IndexField field, ResolvedField resolved)
     {
-        foreach (var field in variationFields)
+        // Texts (aggregates all text relevance levels for TextFilter support)
+        var allTexts = (field.Value.Texts ?? [])
+            .Concat(field.Value.TextsR1 ?? [])
+            .Concat(field.Value.TextsR2 ?? [])
+            .Concat(field.Value.TextsR3 ?? [])
+            .Distinct()
+            .ToArray();
+
+        // Always create all four text fields when ANY text content exists
+        // This ensures consistent schema for TextFilter relevance queries
+        if (allTexts.Length > 0 && resolved.Searchable)
         {
-            // Texts (aggregates all text relevance levels for TextFilter support)
-            var allTexts = (field.Value.Texts ?? [])
-                .Concat(field.Value.TextsR1 ?? [])
-                .Concat(field.Value.TextsR2 ?? [])
-                .Concat(field.Value.TextsR3 ?? [])
-                .Distinct()
-                .ToArray();
+            yield return TextMapping(IndexConstants.FieldTypePostfix.Texts, allTexts);
+            yield return TextMapping(IndexConstants.FieldTypePostfix.TextsR1, field.Value.TextsR1);
+            yield return TextMapping(IndexConstants.FieldTypePostfix.TextsR2, field.Value.TextsR2);
+            yield return TextMapping(IndexConstants.FieldTypePostfix.TextsR3, field.Value.TextsR3);
+        }
 
-            // Always create all four text fields when ANY text content exists
-            // This ensures consistent schema for TextFilter relevance queries
-            if (allTexts.Length > 0)
+        // Keywords (exact match), integers, decimals and dates: filterable and facetable collections
+        foreach (var mapping in ValueMappings(IndexConstants.FieldTypePostfix.Keywords, SearchFieldDataType.String, field.Value.Keywords))
+            yield return mapping;
+        foreach (var mapping in ValueMappings(IndexConstants.FieldTypePostfix.Integers, SearchFieldDataType.Int64, field.Value.Integers))
+            yield return mapping;
+        foreach (var mapping in ValueMappings(IndexConstants.FieldTypePostfix.Decimals, SearchFieldDataType.Double, field.Value.Decimals))
+            yield return mapping;
+        foreach (var mapping in ValueMappings(IndexConstants.FieldTypePostfix.DateTimeOffsets, SearchFieldDataType.DateTimeOffset, field.Value.DateTimeOffsets))
+            yield return mapping;
+
+        // Sortable text field (combines all text relevance levels)
+        var sortableTexts = (field.Value.TextsR1 ?? [])
+            .Union(field.Value.TextsR2 ?? [])
+            .Union(field.Value.TextsR3 ?? [])
+            .Union(field.Value.Texts ?? [])
+            .Take(5).ToArray();
+
+        if (sortableTexts.Length > 0 && resolved.Sortable)
+        {
+            yield return SortMapping(IndexConstants.FieldTypePostfix.Texts, SearchFieldDataType.String, string.Join(" ", sortableTexts).ToLowerInvariant());
+        }
+
+        IndexFieldMapping TextMapping(string postfix, IEnumerable<string>? values) => new()
+        {
+            FieldName = $"{field.FieldName}{postfix}",
+            Values = (values ?? []).OfType<object>().ToArray(),
+            FieldType = SearchFieldDataType.String,
+            IsCollection = true,
+            IsSortable = false,
+            IsSearchable = resolved.Searchable,
+            IsFilterable = resolved.Filterable,
+            IsFacetable = false,
+            AnalyzerName = resolved.Analyzer,
+            SourceField = field
+        };
+
+        IEnumerable<IndexFieldMapping> ValueMappings<T>(string postfix, SearchFieldDataType type, IEnumerable<T>? values)
+        {
+            if (values?.Any() is not true)
+                yield break;
+
+            if (resolved.Filterable || resolved.Facetable)
             {
                 yield return new IndexFieldMapping
                 {
-                    FieldName = $"{field.FieldName}{IndexConstants.FieldTypePostfix.Texts}",
-                    Values = allTexts.OfType<object>().ToArray(),
-                    FieldType = SearchFieldDataType.String,
+                    FieldName = $"{field.FieldName}{postfix}",
+                    Values = values.OfType<object>().ToArray(),
+                    FieldType = type,
                     IsCollection = true,
                     IsSortable = false,
-                    IsSearchable = true,
-                    IsFacetable = false,
-                    SourceField = field
-                };
-
-                // TextsR1 (relevance 1) - always create when any text exists
-                yield return new IndexFieldMapping
-                {
-                    FieldName = $"{field.FieldName}{IndexConstants.FieldTypePostfix.TextsR1}",
-                    Values = (field.Value.TextsR1 ?? []).OfType<object>().ToArray(),
-                    FieldType = SearchFieldDataType.String,
-                    IsCollection = true,
-                    IsSortable = false,
-                    IsSearchable = true,
-                    IsFacetable = false,
-                    SourceField = field
-                };
-
-                // TextsR2 (relevance 2) - always create when any text exists
-                yield return new IndexFieldMapping
-                {
-                    FieldName = $"{field.FieldName}{IndexConstants.FieldTypePostfix.TextsR2}",
-                    Values = (field.Value.TextsR2 ?? []).OfType<object>().ToArray(),
-                    FieldType = SearchFieldDataType.String,
-                    IsCollection = true,
-                    IsSortable = false,
-                    IsSearchable = true,
-                    IsFacetable = false,
-                    SourceField = field
-                };
-
-                // TextsR3 (relevance 3) - always create when any text exists
-                yield return new IndexFieldMapping
-                {
-                    FieldName = $"{field.FieldName}{IndexConstants.FieldTypePostfix.TextsR3}",
-                    Values = (field.Value.TextsR3 ?? []).OfType<object>().ToArray(),
-                    FieldType = SearchFieldDataType.String,
-                    IsCollection = true,
-                    IsSortable = false,
-                    IsSearchable = true,
-                    IsFacetable = false,
+                    IsSearchable = false,
+                    IsFilterable = resolved.Filterable,
+                    IsFacetable = resolved.Facetable,
                     SourceField = field
                 };
             }
 
-            // Keywords (exact match, filterable, facetable)
-            if (field.Value.Keywords?.Any() is true)
+            // Sortable field (single value - first value for sorting)
+            if (resolved.Sortable)
             {
-                yield return new IndexFieldMapping
-                {
-                    FieldName = $"{field.FieldName}{IndexConstants.FieldTypePostfix.Keywords}",
-                    Values = field.Value.Keywords.OfType<object>().ToArray(),
-                    FieldType = SearchFieldDataType.String,
-                    IsCollection = true,
-                    IsSortable = false,
-                    IsSearchable = false,
-                    IsFacetable = true,
-                    SourceField = field
-                };
-
-                // Sortable keyword field (single value - first value for sorting)
-                yield return new IndexFieldMapping
-                {
-                    FieldName = $"{field.FieldName}{IndexConstants.FieldTypePostfix.Keywords}{IndexConstants.FieldTypePostfix.Sortable}",
-                    Values = [field.Value.Keywords.First()],
-                    FieldType = SearchFieldDataType.String,
-                    IsCollection = false,
-                    IsSortable = true,
-                    IsSearchable = false,
-                    IsFacetable = false,
-                    SourceField = field
-                };
-            }
-
-            // Integers (collection - filterable, facetable)
-            if (field.Value.Integers?.Any() is true)
-            {
-                yield return new IndexFieldMapping
-                {
-                    FieldName = $"{field.FieldName}{IndexConstants.FieldTypePostfix.Integers}",
-                    Values = field.Value.Integers.OfType<object>().ToArray(),
-                    FieldType = SearchFieldDataType.Int64,
-                    IsCollection = true,
-                    IsSortable = false,
-                    IsSearchable = false,
-                    IsFacetable = true,
-                    SourceField = field
-                };
-
-                // Sortable integer field (single value - first value for sorting)
-                yield return new IndexFieldMapping
-                {
-                    FieldName = $"{field.FieldName}{IndexConstants.FieldTypePostfix.Integers}{IndexConstants.FieldTypePostfix.Sortable}",
-                    Values = [field.Value.Integers.First()],
-                    FieldType = SearchFieldDataType.Int64,
-                    IsCollection = false,
-                    IsSortable = true,
-                    IsSearchable = false,
-                    IsFacetable = false,
-                    SourceField = field
-                };
-            }
-
-            // Decimals (collection - filterable, facetable)
-            if (field.Value.Decimals?.Any() is true)
-            {
-                yield return new IndexFieldMapping
-                {
-                    FieldName = $"{field.FieldName}{IndexConstants.FieldTypePostfix.Decimals}",
-                    Values = field.Value.Decimals.OfType<object>().ToArray(),
-                    FieldType = SearchFieldDataType.Double,
-                    IsCollection = true,
-                    IsSortable = false,
-                    IsSearchable = false,
-                    IsFacetable = true,
-                    SourceField = field
-                };
-
-                // Sortable decimal field (single value - first value for sorting)
-                yield return new IndexFieldMapping
-                {
-                    FieldName = $"{field.FieldName}{IndexConstants.FieldTypePostfix.Decimals}{IndexConstants.FieldTypePostfix.Sortable}",
-                    Values = [field.Value.Decimals.First()],
-                    FieldType = SearchFieldDataType.Double,
-                    IsCollection = false,
-                    IsSortable = true,
-                    IsSearchable = false,
-                    IsFacetable = false,
-                    SourceField = field
-                };
-            }
-
-            // DateTimeOffsets (collection - filterable, facetable)
-            if (field.Value.DateTimeOffsets?.Any() is true)
-            {
-                yield return new IndexFieldMapping
-                {
-                    FieldName = $"{field.FieldName}{IndexConstants.FieldTypePostfix.DateTimeOffsets}",
-                    Values = field.Value.DateTimeOffsets.OfType<object>().ToArray(),
-                    FieldType = SearchFieldDataType.DateTimeOffset,
-                    IsCollection = true,
-                    IsSortable = false,
-                    IsSearchable = false,
-                    IsFacetable = true,
-                    SourceField = field
-                };
-
-                // Sortable datetimeoffset field (single value - first value for sorting)
-                yield return new IndexFieldMapping
-                {
-                    FieldName = $"{field.FieldName}{IndexConstants.FieldTypePostfix.DateTimeOffsets}{IndexConstants.FieldTypePostfix.Sortable}",
-                    Values = [field.Value.DateTimeOffsets.First()],
-                    FieldType = SearchFieldDataType.DateTimeOffset,
-                    IsCollection = false,
-                    IsSortable = true,
-                    IsSearchable = false,
-                    IsFacetable = false,
-                    SourceField = field
-                };
-            }
-
-            // Sortable text field (combines all text relevance levels)
-            var sortableTexts = (field.Value.TextsR1 ?? [])
-                .Union(field.Value.TextsR2 ?? [])
-                .Union(field.Value.TextsR3 ?? [])
-                .Union(field.Value.Texts ?? [])
-                .Take(5).ToArray();
-
-            if (sortableTexts.Length > 0)
-            {
-                yield return new IndexFieldMapping
-                {
-                    FieldName = $"{field.FieldName}{IndexConstants.FieldTypePostfix.Texts}{IndexConstants.FieldTypePostfix.Sortable}",
-                    Values = [string.Join(" ", sortableTexts).ToLowerInvariant()],
-                    FieldType = SearchFieldDataType.String,
-                    IsCollection = false,
-                    IsSortable = true,
-                    IsSearchable = false,
-                    IsFacetable = false,
-                    SourceField = field
-                };
+                yield return SortMapping(postfix, type, values.First()!);
             }
         }
+
+        IndexFieldMapping SortMapping(string postfix, SearchFieldDataType type, object value) => new()
+        {
+            FieldName = $"{field.FieldName}{postfix}{IndexConstants.FieldTypePostfix.Sortable}",
+            Values = [value],
+            FieldType = type,
+            IsCollection = false,
+            IsSortable = true,
+            IsSearchable = false,
+            IsFilterable = false,
+            IsFacetable = false,
+            SourceField = field
+        };
     }
 }

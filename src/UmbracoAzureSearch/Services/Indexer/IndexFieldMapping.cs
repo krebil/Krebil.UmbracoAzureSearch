@@ -23,6 +23,14 @@ public class IndexFieldMapping
     public required bool IsFacetable { get; init; }
 
     /// <summary>
+    /// Filterable in Azure. Unset follows the old rule: every field that is not sortable is filterable.
+    /// </summary>
+    public bool? IsFilterable { get; init; }
+
+    /// <summary>The Azure analyzer of a searchable field. Null uses <c>standard.lucene</c>.</summary>
+    public string? AnalyzerName { get; init; }
+
+    /// <summary>
     /// Reference to the original IndexField for additional metadata if needed
     /// </summary>
     public IndexField? SourceField { get; init; }
