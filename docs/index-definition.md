@@ -67,7 +67,7 @@ When appsettings and code set the same attribute of a field, code wins. Attribut
 
 ## Automatic fields
 
-With `AutomaticFields` on (the default), Krebil writes every field the Umbraco Search indexers produce. Each field gets attributes by its value type, as before:
+With `AutomaticFields` on (the default), the package writes every field the Umbraco Search indexers produce. Each field gets attributes by its value type, as before:
 
 - Texts are searchable and filterable, and feed the free-text query on all fields.
 - Keywords, integers, decimals and dates are filterable and facetable.
@@ -86,10 +86,10 @@ The Umbraco system fields (`Umb_Id`, `Umb_ParentId`, `Umb_PathIds`, `Umb_Content
 | Searchable | `Searchable` | `.Searchable()` | The texts go into four searchable text fields (`<field>_texts`, `_texts_r1` to `_texts_r3`) and into the free-text query on all fields. A text filter needs it. |
 | Filterable | `Filterable` | `.Filterable()` | The values can be used in filters (`$filter`). |
 | Facetable | `Facetable` | `.Facetable()` | Keywords, numbers and dates can be used in facets. |
-| Sortable | `Sortable` | `.Sortable()` | Krebil writes a single-value `<field>_<type>_sort` field to sort on. |
+| Sortable | `Sortable` | `.Sortable()` | The package writes a single-value `<field>_<type>_sort` field to sort on. |
 | Suggestable | `Suggestable` | `.Suggestable()` | The texts feed [suggestions](suggestions.md). Needs Searchable. |
 | Analyzer | `Analyzer` | `.Analyzer("en.microsoft")` | The Azure analyzer of the searchable text fields. Unset uses `standard.lucene`. |
-| Boost | `Boost` | `.Boost(3)` | The relevance boost of the field. Krebil stores it. A later version turns it into a scoring profile. |
+| Boost | `Boost` | `.Boost(3)` | The relevance boost of the field. The package stores it. A later version turns it into a scoring profile. |
 
 Each builder method takes an optional `bool`, so `.Searchable(false)` turns an attribute off.
 
@@ -105,9 +105,9 @@ Suggestable fields add to the `Suggestions:Fields` setting. When neither sets a 
 
 `.Indexer<TIndexer>()` runs an `IContentIndexer` for this index only. Its fields go through the same definition as other fields. With automatic fields off, opt in each field it produces.
 
-Do not register the indexer as `IContentIndexer` in the container. Umbraco Search runs every registered `IContentIndexer` for every index. Krebil resolves the indexer type from the container when it is registered as itself, or creates it with its dependencies.
+Do not register the indexer as `IContentIndexer` in the container. Umbraco Search runs every registered `IContentIndexer` for every index. The package resolves the indexer type from the container when it is registered as itself, or creates it with its dependencies.
 
-Krebil loads the content item for each document it indexes for the index. The indexer gets the cultures of the document, and `published: true` for an index with the published content change strategy.
+The package loads the content item for each document it indexes for the index. The indexer gets the cultures of the document, and `published: true` for an index with the published content change strategy.
 
 ## Custom index from start to end
 
@@ -134,7 +134,7 @@ public sealed class SiteSearchComposer : IComposer
 
 ## Indexing paths
 
-Every indexing path ends in Krebil's indexer, and the indexer applies the definition. The definition applies to:
+Every indexing path ends in the package's indexer, and the indexer applies the definition. The definition applies to:
 
 - The Umbraco Search queue: publish, save and delete.
 - A rebuild from the backoffice.
@@ -146,7 +146,7 @@ The indexer also adds new fields to the Azure schema as documents bring them. Th
 
 Azure limits the number of fields in one index: 1000 on every tier, and 100 on Basic services created before April 3, 2024. Set `UmbracoAzureSearch:MaxFieldsPerIndex` to `100` on an older Basic service.
 
-With automatic fields off, Krebil counts the fields at startup and stops startup when the count is over the limit. The count is:
+With automatic fields off, the package counts the fields at startup and stops startup when the count is over the limit. The count is:
 
 | Part | Fields |
 |---|---|
@@ -159,7 +159,7 @@ With automatic fields off, Krebil counts the fields at startup and stops startup
 
 The count is an upper limit for a field with one value type. A searchable and filterable text field counts 5 and uses 4.
 
-With automatic fields on, the fields depend on the content, so Krebil does not count them. Azure rejects a new field over the limit when a document brings it.
+With automatic fields on, the fields depend on the content, so the package does not count them. Azure rejects a new field over the limit when a document brings it.
 
 ## Validation
 

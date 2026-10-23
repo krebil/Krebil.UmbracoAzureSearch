@@ -65,7 +65,7 @@ public sealed class AzureSearchIndexBuilder
 
     /// <summary>
     /// Runs an <see cref="IContentIndexer"/> for this index only. Do not also register it as <see cref="IContentIndexer"/>,
-    /// or it runs for every index. Krebil resolves it from the container, or creates it with its dependencies. Code only.
+    /// or it runs for every index. The package resolves it from the container, or creates it with its dependencies. Code only.
     /// </summary>
     public AzureSearchIndexBuilder Indexer<TIndexer>() where TIndexer : class, IContentIndexer
     {
