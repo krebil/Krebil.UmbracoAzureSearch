@@ -58,6 +58,10 @@ When both locations are set for an index, Krebil uses the new location and ignor
 
 `UmbracoAzureSearchOptions.Suggestions` and `UmbracoAzureSearchOptions.GetSuggestionOptions` are obsolete. Use `ConfigureAzureSearchIndex` to set suggestions in code, and `IOptionsMonitor<AzureSearchIndexOptions>.Get(alias).Suggestions` to read them.
 
+### Serverless
+
+Krebil now reads `UmbracoAzureSearch:Serverless`. Before, only `UmbracoAzureSearch:IsServerless` worked, and a `Serverless` key had no effect. Both keys work now. When both are set, `IsServerless` wins. A site that set `Serverless: true` and saw errors on a serverless service now works without a change.
+
 ## New startup validation
 
 Krebil checks the [index configuration](index-configuration.md#validation) at startup. A configuration that worked before can now stop startup:

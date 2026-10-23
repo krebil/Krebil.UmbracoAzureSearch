@@ -37,6 +37,7 @@ public static class ServiceCollectionExtensions
     {
         services
             .Configure<UmbracoAzureSearchOptions>(configuration.GetSection(UmbracoAzureSearchOptions.Name))
+            .Configure<UmbracoAzureSearchOptions>(options => ApplyServerlessKey(configuration, options))
             .AddSingleton<IAzureSearchClientFactory>(sp => new AzureSearchClientFactory(
                 sp.GetRequiredService<IOptions<UmbracoAzureSearchOptions>>(),
                 sp.GetRequiredService<IIndexAliasResolver>(),
@@ -69,6 +70,17 @@ public static class ServiceCollectionExtensions
         });
 
         return services;
+    }
+
+    // "Serverless" is accepted next to the property name "IsServerless". IsServerless wins when both are set.
+    private static void ApplyServerlessKey(IConfiguration configuration, UmbracoAzureSearchOptions options)
+    {
+        var section = configuration.GetSection(UmbracoAzureSearchOptions.Name);
+        if (section[nameof(UmbracoAzureSearchOptions.IsServerless)] is null
+            && bool.TryParse(section[UmbracoAzureSearchOptions.ServerlessKey], out var serverless))
+        {
+            options.IsServerless = serverless;
+        }
     }
 
     /// <summary>
