@@ -11,6 +11,14 @@ public class UmbracoAzureSearchOptions
 
     public string? Environment { get; set; }
 
+    /// <summary>
+    /// The configuration key <c>Serverless</c>. It sets <see cref="IsServerless"/> when <c>IsServerless</c> is not set.
+    /// </summary>
+    public const string ServerlessKey = "Serverless";
+
+    /// <summary>
+    /// True for a serverless Azure AI Search service. Set by <c>Serverless</c> or <c>IsServerless</c>; <c>IsServerless</c> wins when both are set.
+    /// </summary>
     public bool IsServerless { get; set; }
 
     // Keyed by Umbraco index alias (before the environment suffix); an alias without an entry uses the defaults.

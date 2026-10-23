@@ -33,17 +33,17 @@ Add your Azure AI Search credentials to `appsettings.json`:
 }
 ```
 
-For a serverless Azure AI Search service, also set `IsServerless`:
+For a serverless Azure AI Search service, also set `Serverless`:
 
 ```json
 {
   "UmbracoAzureSearch": {
-    "IsServerless": true
+    "Serverless": true
   }
 }
 ```
 
-The key is `IsServerless`. A `Serverless` key has no effect.
+Krebil also reads the older key `IsServerless`. When both keys are set, `IsServerless` wins.
 
 ### Microsoft Entra ID (managed identity)
 
