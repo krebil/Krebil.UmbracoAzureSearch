@@ -43,7 +43,7 @@ For a serverless Azure AI Search service, also set `Serverless`:
 }
 ```
 
-Krebil also reads the older key `IsServerless`. When both keys are set, `IsServerless` wins.
+The package also reads the older key `IsServerless`. When both keys are set, `IsServerless` wins.
 
 ### Microsoft Entra ID (managed identity)
 

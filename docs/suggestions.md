@@ -67,7 +67,7 @@ When appsettings and code set the same value, code wins.
 | `Enabled` | `.Suggestions(bool)` | `true` | `false` gives the index no suggestions and saves the index space. |
 | `Fields` | `.SuggestionFields(params string[])` | Highest-relevance texts | The Umbraco fields whose texts feed suggestions. |
 
-The settings used to be under `UmbracoAzureSearch:Suggestions:<alias>`. Krebil still reads that location and logs a warning. See [Settings that move](upgrading.md#settings-that-move).
+The settings used to be under `UmbracoAzureSearch:Suggestions:<alias>`. The package still reads that location and logs a warning. See [Settings that move](upgrading.md#settings-that-move).
 
 ### Upgrading
 
