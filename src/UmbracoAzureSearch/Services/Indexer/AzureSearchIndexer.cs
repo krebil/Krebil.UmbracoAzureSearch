@@ -32,6 +32,9 @@ public class AzureSearchIndexer(
 {
     private readonly ConcurrentDictionary<Type, IContentIndexer> _indexers = new();
 
+    // Index aliases already warned about missing suggestion copies; the indexer is a singleton, so one warning per alias.
+    private readonly ConcurrentDictionary<string, bool> _missingSuggestionCopyWarnings = new(StringComparer.OrdinalIgnoreCase);
+
     public async Task AddOrUpdateAsync(string indexAlias, Guid id, UmbracoObjectTypes objectType,
         IEnumerable<Variation> variations,
         IEnumerable<IndexField> fields, ContentProtection? protection)
@@ -61,7 +64,8 @@ public class AzureSearchIndexer(
 
         var mappingResult = documentMapper.MapToDocuments(id, objectType, variationList, fieldList, protection, definition);
 
-        await EnsureFieldsExist(indexAlias, mappingResult.FieldMappings);
+        var indexFields = await EnsureFieldsExist(indexAlias, mappingResult.FieldMappings, definition);
+        DropMissingSuggestionCopies(indexAlias, mappingResult.Documents, indexFields);
         var batch = IndexDocumentsBatch.MergeOrUpload(mappingResult.Documents);
         logger.LogDebug("Indexing {DocumentCount} document(s) for {Id} into {IndexAlias}", mappingResult.Documents.Count, id, indexAlias);
         var result = await searchClient.IndexDocumentsAsync(batch, new IndexDocumentsOptions { ThrowOnAnyError = false });
@@ -141,34 +145,60 @@ public class AzureSearchIndexer(
         static string Identifier(IndexField field) => $"{field.FieldName}|{field.Culture}|{field.Segment}";
     }
 
-    private async Task EnsureFieldsExist(string indexAlias, List<IndexFieldMapping> fieldMappings)
+    private async Task<HashSet<string>> EnsureFieldsExist(string indexAlias, List<IndexFieldMapping> fieldMappings, IndexDefinition definition)
     {
         indexAlias = indexAliasResolver.Resolve(indexAlias);
         var indexClient = azureSearchClientFactory.GetSearchIndexClient();
         var index = await indexClient.GetIndexAsync(indexAlias);
         index.ThrowIfNull();
 
+        // The per-culture aggregate copies of a culture added to the definition
+        var changed = IndexSchema.AddMissingCopies(index.Value, definition);
+
         var currentFieldNames = index.Value.Fields.Select(f => f.Name).ToHashSet();
 
-        // Get all field names from field mappings
-        var mappedFieldNames = fieldMappings.Select(m => m.FieldName).Distinct().ToHashSet();
-
-        // Find missing fields
-        var missingFields = mappedFieldNames.Except(currentFieldNames).ToList();
-
-        if (missingFields.Count == 0)
-            return;
-
-        // Add missing fields to the index schema using metadata from field mappings
-        foreach (var fieldName in missingFields)
+        // Find missing fields, and add them to the index schema using metadata from field mappings
+        foreach (var mapping in fieldMappings.Where(m => !currentFieldNames.Contains(m.FieldName)).DistinctBy(m => m.FieldName))
         {
-            var mapping = fieldMappings.First(m => m.FieldName == fieldName);
-            var field = CreateFieldDefinition(mapping);
-            index.Value.Fields.Add(field);
+            index.Value.Fields.Add(CreateFieldDefinition(mapping));
+            currentFieldNames.Add(mapping.FieldName);
+            changed = true;
         }
 
         // Update the index with new fields
-        await indexClient.CreateOrUpdateIndexAsync(index.Value);
+        if (changed)
+        {
+            await indexClient.CreateOrUpdateIndexAsync(index.Value);
+        }
+
+        return currentFieldNames;
+    }
+
+    // Azure adds fields to a suggester only when it creates the suggester, so a suggestion copy of a culture added
+    // after the index was created waits for a rebuild. Writing it before would fail the whole document.
+    private void DropMissingSuggestionCopies(string indexAlias, List<SearchDocument> documents, HashSet<string> indexFields)
+    {
+        var prefix = $"{IndexConstants.FieldNames.Suggestion}_";
+        var missing = documents.SelectMany(d => d.Keys)
+            .Where(k => k.StartsWith(prefix, StringComparison.Ordinal) && !indexFields.Contains(k))
+            .ToHashSet();
+        if (missing.Count == 0)
+            return;
+
+        foreach (var document in documents)
+        {
+            foreach (var key in missing)
+            {
+                document.Remove(key);
+            }
+        }
+
+        if (_missingSuggestionCopyWarnings.TryAdd(indexAlias, true))
+        {
+            logger.LogWarning(
+                "Index {IndexAlias} has no suggestion fields {Fields}. Rebuild the index to add them.",
+                indexAlias, string.Join(", ", missing.Order()));
+        }
     }
 
     private SearchField CreateFieldDefinition(IndexFieldMapping mapping)

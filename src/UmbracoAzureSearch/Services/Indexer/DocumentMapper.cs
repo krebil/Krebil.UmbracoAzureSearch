@@ -94,11 +94,146 @@ public class DocumentMapper
             ? protection.AccessIds.ToArray()
             : [Guid.Empty];
 
-        // relevant field values for this variation (including invariant fields)
+        // relevant field values for this variation (including invariant fields), and the attributes of each
+        var all = TextsOf(MergeFields(fieldsByFieldName, variation, _ => true), definition);
+
+        // explicit document field values - using intermediary mappings
+        var fieldMappings = all.Fields.SelectMany(f => CreateFieldMappings(f.Field, f.Resolved)).ToList();
+
+        var document = new SearchDocument()
+        {
+            [IndexConstants.FieldNames.Id] = $"{id.AsKeyword()}_{culture}_{segment}",
+            [IndexConstants.FieldNames.ObjectType] = objectType.ToString(),
+            [IndexConstants.FieldNames.Key] = id.AsKeyword(),
+            [IndexConstants.FieldNames.Culture] = culture,
+            [IndexConstants.FieldNames.Segment] = segment,
+            [IndexConstants.FieldNames.AccessKeys] = accessKeys.Select(g => g.AsKeyword()).ToArray(),
+        };
+
+        // FieldPerCulture: a mapped culture writes its culture texts to the culture copies and its invariant texts to
+        // the invariant copies. An invariant document writes the invariant copies and the shared fields, so queries
+        // in any culture find it. An unmapped culture writes the shared fields, as without copies.
+        var suffix = definition.CultureSuffix(variation.Culture);
+        Texts shared = suffix is null ? all : Texts.Empty;
+        WriteAggregates(document, shared, null);
+        if (definition.FieldPerCulture)
+        {
+            if (suffix is not null)
+            {
+                var cultureTexts = TextsOf(MergeFields(fieldsByFieldName, variation, f => f.Culture is not null), definition);
+                var invariantTexts = TextsOf(MergeFields(fieldsByFieldName, variation, f => f.Culture is null), definition);
+                WriteCopies(document, fieldMappings, cultureTexts, suffix, definition);
+                WriteCopies(document, fieldMappings, invariantTexts, IndexDefinition.InvariantSuffix, definition);
+            }
+            else if (variation.Culture is null)
+            {
+                WriteCopies(document, fieldMappings, all, IndexDefinition.InvariantSuffix, definition);
+            }
+        }
+
+        if (definition.Options.Suggestions.Enabled)
+        {
+            // Without suggestion copies every document fills the shared field, and the culture filter does the rest.
+            var sharedSuggestions = definition.SuggestionsPerCulture ? shared : all;
+            document[IndexConstants.FieldNames.Suggestion] = SuggestionText(sharedSuggestions, definition);
+        }
+
+        foreach (var mapping in fieldMappings)
+        {
+            document[mapping.FieldName] = mapping.IsCollection
+                ? mapping.Values
+                : mapping.Values.FirstOrDefault();
+        }
+
+        return (document, fieldMappings);
+    }
+
+    // The texts of one part of a variation (all of it, its culture fields or its invariant fields) that go into the index.
+    private sealed record Texts(
+        (IndexField Field, ResolvedField Resolved)[] Fields,
+        string[] AllTexts,
+        string[] AllTextsR1,
+        string[] AllTextsR2,
+        string[] AllTextsR3)
+    {
+        public static readonly Texts Empty = new([], [], [], [], []);
+    }
+
+    private static Texts TextsOf(IndexField[] fields, IndexDefinition definition)
+    {
+        // the index definition decides which fields are in the index and their attributes
+        var resolvedFields = fields
+            .Select(field => (Field: field, Resolved: definition.Resolve(field.FieldName)))
+            .Where(f => f.Resolved is not null)
+            .Select(f => (f.Field, Resolved: f.Resolved!))
+            .ToArray();
+
+        // all searchable text fields for "free text query on all fields"
+        var searchable = resolvedFields.Where(f => f.Resolved.Searchable).Select(f => f.Field).ToArray();
+        return new Texts(
+            resolvedFields,
+            searchable.SelectMany(field => field.Value.Texts ?? []).ToArray(),
+            searchable.SelectMany(field => field.Value.TextsR1 ?? []).ToArray(),
+            searchable.SelectMany(field => field.Value.TextsR2 ?? []).ToArray(),
+            searchable.SelectMany(field => field.Value.TextsR3 ?? []).ToArray());
+    }
+
+    private static void WriteAggregates(SearchDocument document, Texts texts, string? suffix)
+    {
+        string Name(string field) => suffix is null ? field : IndexDefinition.CopyName(field, suffix);
+        document[Name(IndexConstants.FieldNames.AllTexts)] = texts.AllTexts;
+        document[Name(IndexConstants.FieldNames.AllTextsR1)] = texts.AllTextsR1;
+        document[Name(IndexConstants.FieldNames.AllTextsR2)] = texts.AllTextsR2;
+        document[Name(IndexConstants.FieldNames.AllTextsR3)] = texts.AllTextsR3;
+    }
+
+    // The copies of one suffix: aggregate texts, the suggestion copy, and the text fields of the PerCulture fields.
+    private static void WriteCopies(
+        SearchDocument document, List<IndexFieldMapping> fieldMappings, Texts texts, string suffix, IndexDefinition definition)
+    {
+        WriteAggregates(document, texts, suffix);
+
+        if (definition.Options.Suggestions.Enabled && definition.SuggestionsPerCulture)
+        {
+            document[IndexDefinition.CopyName(IndexConstants.FieldNames.Suggestion, suffix)] = SuggestionText(texts, definition);
+        }
+
+        var analyzer = definition.CopyAnalyzer(suffix);
+        foreach (var (field, resolved) in texts.Fields.Where(f => f.Resolved is { PerCulture: true, Searchable: true }))
+        {
+            var copy = resolved with { Analyzer = analyzer, Filterable = false };
+            fieldMappings.AddRange(CreateFieldMappings(field, copy)
+                .Where(m => m.IsSearchable)
+                .Select(m => new IndexFieldMapping
+                {
+                    FieldName = IndexDefinition.CopyName(m.FieldName, suffix),
+                    Values = m.Values,
+                    FieldType = m.FieldType,
+                    IsCollection = m.IsCollection,
+                    IsSortable = false,
+                    IsSearchable = true,
+                    IsFilterable = false,
+                    IsFacetable = false,
+                    AnalyzerName = analyzer,
+                    SourceField = m.SourceField
+                }));
+        }
+    }
+
+    private static string? SuggestionText(Texts texts, IndexDefinition definition)
+    {
+        var suggestionTexts = SuggestionTexts(texts.Fields, texts.AllTextsR1, definition.Options.Suggestions);
+        return suggestionTexts.Length > 0 ? string.Join(" ", suggestionTexts) : null;
+    }
+
+    // One field per name with the values that apply to the variation, from the fields that pass the filter.
+    private static IndexField[] MergeFields(
+        IEnumerable<IGrouping<string, IndexField>> fieldsByFieldName, Variation variation, Func<IndexField, bool> include)
+    {
         IndexField[] variationFields = fieldsByFieldName.Select(
                 g =>
                 {
-                    IndexField[] applicableFields = g.Where(f =>
+                    IndexField[] applicableFields = g.Where(f => include(f) && (
                         (variation.Culture is not null
                          && variation.Segment is not null
                          && f.Culture == variation.Culture
@@ -109,7 +244,7 @@ public class DocumentMapper
                         || (variation.Segment is not null
                             && f.Culture is null
                             && f.Segment == variation.Segment)
-                        || (f.Culture is null && f.Segment is null)
+                        || (f.Culture is null && f.Segment is null))
                     ).ToArray();
 
                     return applicableFields.Any()
@@ -143,7 +278,7 @@ public class DocumentMapper
         // large HTML blobs with inline styles. Azure Search imposes a 32,766-byte UTF-8 term
         // limit on any field that is filterable, sortable, or facetable — including the per-field
         // _texts_sort fields — so we sanitize here rather than at the field definition level.
-        variationFields = variationFields
+        return variationFields
             .Select(field => field with
             {
                 Value = field.Value with
@@ -155,62 +290,6 @@ public class DocumentMapper
                 }
             })
             .ToArray();
-
-        // the index definition decides which fields are in the index and their attributes
-        var resolvedFields = variationFields
-            .Select(field => (Field: field, Resolved: definition.Resolve(field.FieldName)))
-            .Where(f => f.Resolved is not null)
-            .Select(f => (f.Field, Resolved: f.Resolved!))
-            .ToArray();
-        var searchableFields = resolvedFields.Where(f => f.Resolved.Searchable).Select(f => f.Field).ToArray();
-
-        // all searchable text fields for "free text query on all fields"
-        var allTexts = searchableFields
-            .SelectMany(field => field.Value.Texts ?? [])
-            .ToArray();
-        var allTextsR1 = searchableFields
-            .SelectMany(field => field.Value.TextsR1 ?? [])
-            .ToArray();
-        var allTextsR2 = searchableFields
-            .SelectMany(field => field.Value.TextsR2 ?? [])
-            .ToArray();
-        var allTextsR3 = searchableFields
-            .SelectMany(field => field.Value.TextsR3 ?? [])
-            .ToArray();
-
-        // explicit document field values - using intermediary mappings
-        var fieldMappings = resolvedFields.SelectMany(f => CreateFieldMappings(f.Field, f.Resolved)).ToList();
-
-        var document = new SearchDocument()
-        {
-            [IndexConstants.FieldNames.Id] = $"{id.AsKeyword()}_{culture}_{segment}",
-            [IndexConstants.FieldNames.ObjectType] = objectType.ToString(),
-            [IndexConstants.FieldNames.Key] = id.AsKeyword(),
-            [IndexConstants.FieldNames.Culture] = culture,
-            [IndexConstants.FieldNames.Segment] = segment,
-            [IndexConstants.FieldNames.AccessKeys] = accessKeys.Select(g => g.AsKeyword()).ToArray(),
-            [IndexConstants.FieldNames.AllTexts] = allTexts,
-            [IndexConstants.FieldNames.AllTextsR1] = allTextsR1,
-            [IndexConstants.FieldNames.AllTextsR2] = allTextsR2,
-            [IndexConstants.FieldNames.AllTextsR3] = allTextsR3,
-        };
-
-        if (definition.Options.Suggestions.Enabled)
-        {
-            var suggestionTexts = SuggestionTexts(resolvedFields, allTextsR1, definition.Options.Suggestions);
-            document[IndexConstants.FieldNames.Suggestion] = suggestionTexts.Length > 0
-                ? string.Join(" ", suggestionTexts)
-                : null;
-        }
-
-        foreach (var mapping in fieldMappings)
-        {
-            document[mapping.FieldName] = mapping.IsCollection                                                                                                                                                                                
-                         ? mapping.Values                                                                                                                                                                                                              
-                         : mapping.Values.FirstOrDefault(); 
-        }
-
-        return (document, fieldMappings);
     }
 
     // The configured and suggestable fields with all their texts, or by default every searchable highest-relevance (R1) text.

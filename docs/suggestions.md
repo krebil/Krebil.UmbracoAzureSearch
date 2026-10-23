@@ -67,6 +67,8 @@ When appsettings and code set the same value, code wins.
 | `Enabled` | `.Suggestions(bool)` | `true` | `false` gives the index no suggestions and saves the index space. |
 | `Fields` | `.SuggestionFields(params string[])` | Highest-relevance texts | The Umbraco fields whose texts feed suggestions. |
 
+With the `FieldPerCulture` analyzer mode, the suggestion field gets a copy per mapped culture by default, and a mapped culture completes from its copy plus the invariant copy. Set `Analyzers:SuggestionAnalyzer` to a fixed analyzer, for example `standard.lucene`, to keep one shared suggestion field. See [SuggestionAnalyzer](analyzers.md#suggestionanalyzer) for when to pick which.
+
 The settings used to be under `UmbracoAzureSearch:Suggestions:<alias>`. The package still reads that location and logs a warning. See [Settings that move](upgrading.md#settings-that-move).
 
 ### Upgrading

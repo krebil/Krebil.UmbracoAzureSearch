@@ -69,7 +69,8 @@ The package checks the [index configuration](index-configuration.md#validation) 
 - An alias under `UmbracoAzureSearch:Indexes`, or in `ConfigureAzureSearchIndex`, that Umbraco Search does not register. A typo in an alias is the usual cause. The old `Suggestions` location is not checked.
 - A field that is suggestable but not searchable.
 - A field with an analyzer that Azure does not have.
-- An index with automatic fields off whose fields exceed `UmbracoAzureSearch:MaxFieldsPerIndex`.
+- An index whose fields exceed `UmbracoAzureSearch:MaxFieldsPerIndex`.
+- An unknown analyzer name in `Analyzers`, an analyzer that suggestion fields do not allow, and `FieldPerCulture` without a mapped culture.
 
 ## What needs a rebuild
 
@@ -82,6 +83,8 @@ The package checks the [index configuration](index-configuration.md#validation) 
 | Change searchable, filterable, facetable, sortable or the analyzer of an existing field | Yes |
 | Change the content types or cultures of an index | Yes |
 | Add a per-index indexer | Yes, to fill existing content |
+| Change `Analyzers:Mode`, add a culture, change an analyzer | Yes |
+| Change `SuggestionAnalyzer` or suggestion fields | Yes |
 
 ## Upgrade order
 
