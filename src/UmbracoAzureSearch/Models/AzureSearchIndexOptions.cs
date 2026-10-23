@@ -10,6 +10,9 @@ public class AzureSearchIndexOptions
     /// <summary>Suggestion settings, under <c>Indexes:&lt;alias&gt;:Suggestions</c>.</summary>
     public SuggestionOptions Suggestions { get; set; } = new();
 
+    /// <summary>Analyzer settings, under <c>Indexes:&lt;alias&gt;:Analyzers</c>.</summary>
+    public AnalyzerOptions Analyzers { get; set; } = new();
+
     /// <summary>
     /// Writes every field the Umbraco Search indexers produce. Off writes only the opted-in <see cref="Fields"/>
     /// and the Umbraco system fields (<c>Umb_*</c>). On by default.

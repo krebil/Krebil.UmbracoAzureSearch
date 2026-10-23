@@ -9,7 +9,8 @@ internal sealed record ResolvedField(
     bool Facetable,
     bool Sortable,
     bool Suggestable,
-    string? Analyzer);
+    string? Analyzer,
+    bool PerCulture = false);
 
 /// <summary>
 /// Applies the index definition (<see cref="AzureSearchIndexOptions"/>) to fields and cultures. The indexer applies it on
@@ -19,6 +20,9 @@ internal sealed class IndexDefinition(AzureSearchIndexOptions options)
 {
     // An automatic field keeps the attributes the package always gave it: searchable texts, filterable and facetable values, sortable.
     private static readonly ResolvedField Automatic = new(true, true, true, true, false, null);
+
+    /// <summary>The suffix of the invariant copies, as in <c>allTexts_inv</c>.</summary>
+    public const string InvariantSuffix = "inv";
 
     public AzureSearchIndexOptions Options { get; } = options;
 
@@ -39,7 +43,56 @@ internal sealed class IndexDefinition(AzureSearchIndexOptions options)
             Attribute(field.Facetable, Automatic.Facetable),
             Attribute(field.Sortable, Automatic.Sortable),
             field.Suggestable ?? false,
-            field.Analyzer);
+            field.Analyzer,
+            field.PerCulture ?? false);
+    }
+
+    /// <summary>True when the index keeps copies of its text fields per culture.</summary>
+    public bool FieldPerCulture => Options.Analyzers.Mode == AnalyzerMode.FieldPerCulture;
+
+    /// <summary>True when the suggestion field has copies per culture.</summary>
+    public bool SuggestionsPerCulture
+        => FieldPerCulture && string.Equals(Options.Analyzers.SuggestionAnalyzer, AnalyzerOptions.PerCulture, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The copy suffix of a culture: its mapped key, in lowercase with "-" as "_", or null for an unmapped culture,
+    /// for invariant (null), and outside <see cref="AnalyzerMode.FieldPerCulture"/>.
+    /// </summary>
+    public string? CultureSuffix(string? culture)
+        => FieldPerCulture && culture is not null && MatchKey(Options.Analyzers.Cultures.Keys, culture) is { } key
+            ? Suffix(key)
+            : null;
+
+    /// <summary>The copy suffix and analyzer of every mapped culture, then the invariant copy.</summary>
+    public IEnumerable<(string Suffix, string Analyzer)> Copies()
+    {
+        if (!FieldPerCulture)
+            yield break;
+
+        foreach (var (key, analyzer) in Options.Analyzers.Cultures)
+        {
+            yield return (Suffix(key), analyzer);
+        }
+
+        yield return (InvariantSuffix, Options.Analyzers.Invariant);
+    }
+
+    /// <summary>The analyzer of the copies with this suffix.</summary>
+    public string? CopyAnalyzer(string suffix)
+        => Copies().Where(c => c.Suffix == suffix).Select(c => c.Analyzer).FirstOrDefault();
+
+    /// <summary>The name of a per-culture copy: the field name, "_", and the suffix.</summary>
+    public static string CopyName(string fieldName, string suffix) => $"{fieldName}_{suffix}";
+
+    private static string Suffix(string key) => key.ToLowerInvariant().Replace('-', '_');
+
+    // An exact key wins over a key for the language part, so "pt-BR" wins over "pt" for pt-BR, and "pt" covers pt-PT.
+    internal static string? MatchKey(IEnumerable<string> keys, string culture)
+    {
+        var keyList = keys as IReadOnlyCollection<string> ?? keys.ToArray();
+        var language = culture.Split('-')[0];
+        return keyList.FirstOrDefault(key => string.Equals(key, culture, StringComparison.OrdinalIgnoreCase))
+               ?? keyList.FirstOrDefault(key => string.Equals(key, language, StringComparison.OrdinalIgnoreCase));
     }
 
     public static bool IsSystemField(string fieldName)
@@ -51,9 +104,6 @@ internal sealed class IndexDefinition(AzureSearchIndexOptions options)
         if (culture is null || Options.Cultures is not { Count: > 0 } cultures)
             return true;
 
-        var language = culture.Split('-')[0];
-        return cultures.Any(key =>
-            string.Equals(key, culture, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(key, language, StringComparison.OrdinalIgnoreCase));
+        return MatchKey(cultures, culture) is not null;
     }
 }
