@@ -63,6 +63,11 @@ internal sealed class AzureSearchIndexOptionsValidator(IOptions<UmbracoAzureSear
 
         ValidateAnalyzers(options.Analyzers, definition, isKnownAnalyzer, failures);
 
+        foreach (var (fieldName, field) in options.Fields.Where(f => f.Value.Boost is <= 0))
+        {
+            failures.Add($"The field \"{fieldName}\" has the boost {field.Boost}. A boost must be greater than 0.");
+        }
+
         if (options.RebuildMinimumDocumentPercent is < 0 or > 100)
         {
             failures.Add($"RebuildMinimumDocumentPercent is {options.RebuildMinimumDocumentPercent}. Use 0 to 100; 0 turns the count check off.");

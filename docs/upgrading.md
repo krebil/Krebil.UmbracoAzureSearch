@@ -72,6 +72,7 @@ The package checks the [index configuration](index-configuration.md#validation) 
 - An index whose fields exceed `UmbracoAzureSearch:MaxFieldsPerIndex`.
 - An unknown analyzer name in `Analyzers`, an analyzer that suggestion fields do not allow, and `FieldPerCulture` or `IndexPerCulture` without a mapped culture.
 - A spell check query language that the Azure lexicon speller does not support.
+- A scoring profile that uses a missing field or a field of the wrong type, a default profile that does not exist, more than 100 profiles, and a boost of 0 or less.
 - `RebuildMinimumDocumentPercent` outside 0 to 100, or a negative `RebuildDeleteDelaySeconds`.
 - `IndexPerCulture` on a backoffice index, and more Azure indexes than `UmbracoAzureSearch:MaxIndexes` when an index uses `IndexPerCulture`.
 
@@ -88,6 +89,7 @@ The package checks the [index configuration](index-configuration.md#validation) 
 | Add a per-index indexer | Yes, to fill existing content |
 | Add fields or scoring profiles with `ConfigureIndex` | No, applied at startup |
 | Turn on spell check for a culture | No |
+| Add, change or remove scoring profiles, boosts or the default profile | No |
 | Turn on `ZeroDowntimeRebuild` | First migration at the next rebuild. See [First migration](zero-downtime-rebuild.md#first-migration). |
 | Add analyzers or change existing fields with `ConfigureIndex` | Yes |
 | Change `Analyzers:Mode`, add a culture, change an analyzer | Yes |
