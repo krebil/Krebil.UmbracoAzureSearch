@@ -28,6 +28,14 @@ public sealed class AzureSearchIndexBuilder
         return this;
     }
 
+    /// <summary>The tags <c>SuggestAsync</c> puts around a match. Same as <c>Suggestions:HighlightPreTag</c> and <c>HighlightPostTag</c>.</summary>
+    public AzureSearchIndexBuilder SuggestionHighlight(string preTag, string postTag)
+    {
+        _options.Suggestions.HighlightPreTag = preTag;
+        _options.Suggestions.HighlightPostTag = postTag;
+        return this;
+    }
+
     /// <summary>Writes every field (on, the default) or only the opted-in fields (off). Same as <c>AutomaticFields</c>.</summary>
     public AzureSearchIndexBuilder AutomaticFields(bool enabled)
     {
