@@ -62,6 +62,9 @@ internal sealed class ZeroDowntimeRebuildHandler(
         var indexClient = azureSearchClientFactory.GetSearchIndexClient();
         foreach (var (rebuild, oldCount, newCount) in counts)
         {
+            // The new index has only the profiles the sources return; profiles added another way stay behind.
+            var dropped = rebuild.Old is null ? [] : await DroppedProfilesAsync(rebuild.Old, rebuild.New);
+
             // Before the first swap the name is a plain index. The plain index goes first, so the swap does not rely on
             // Azure accepting an alias with the name of an index; searches fail between the delete and the alias.
             if (rebuild.OldIsPlainIndex)
@@ -72,8 +75,9 @@ internal sealed class ZeroDowntimeRebuildHandler(
             await indexClient.CreateOrUpdateAliasAsync(new SearchAlias(rebuild.Name, rebuild.New), cancellationToken: CancellationToken.None);
             slots.Forget(rebuild.Name);
             logger.LogInformation(
-                "Swap done for {IndexAlias}: {Name} moved from {OldIndex} to {NewIndex}. Documents {OldDocumentCount} before, {NewDocumentCount} after, rebuild took {Duration}",
-                indexAlias, rebuild.Name, rebuild.Old ?? "(none)", rebuild.New, oldCount, newCount, DateTimeOffset.UtcNow - rebuild.Started);
+                "Swap done for {IndexAlias}: {Name} moved from {OldIndex} to {NewIndex}. Documents {OldDocumentCount} before, {NewDocumentCount} after, rebuild took {Duration}. Dropped scoring profiles: {DroppedScoringProfiles}",
+                indexAlias, rebuild.Name, rebuild.Old ?? "(none)", rebuild.New, oldCount, newCount, DateTimeOffset.UtcNow - rebuild.Started,
+                dropped.Length == 0 ? "none" : string.Join(", ", dropped));
         }
 
         var oldIndexes = rebuilds.Where(r => r is { Old: not null, OldIsPlainIndex: false }).Select(r => r.Old!).ToArray();
@@ -128,6 +132,22 @@ internal sealed class ZeroDowntimeRebuildHandler(
             {
                 logger.LogWarning(exception, "Could not delete the new index {NewIndex} of {IndexAlias}. The next rebuild or startup deletes it", rebuild.New, indexAlias);
             }
+        }
+    }
+
+    private async Task<string[]> DroppedProfilesAsync(string oldIndex, string newIndex)
+    {
+        try
+        {
+            var indexClient = azureSearchClientFactory.GetSearchIndexClient();
+            SearchIndex old = await indexClient.GetIndexAsync(oldIndex);
+            SearchIndex @new = await indexClient.GetIndexAsync(newIndex);
+            return old.ScoringProfiles.Select(p => p.Name).Except(@new.ScoringProfiles.Select(p => p.Name)).ToArray();
+        }
+        catch (Exception exception)
+        {
+            logger.LogDebug(exception, "Could not compare the scoring profiles of {OldIndex} and {NewIndex}", oldIndex, newIndex);
+            return [];
         }
     }
 
