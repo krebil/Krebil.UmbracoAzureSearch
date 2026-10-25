@@ -1,5 +1,6 @@
 using Azure.Search.Documents;
 using Azure.Search.Documents.Indexes.Models;
+using Azure.Search.Documents.Models;
 using Umbraco.Cms.Search.Core.Services.ContentIndexing;
 using UmbracoAzureSearch.Models;
 
@@ -33,6 +34,13 @@ public sealed class AzureSearchIndexBuilder
     {
         _options.Suggestions.HighlightPreTag = preTag;
         _options.Suggestions.HighlightPostTag = postTag;
+        return this;
+    }
+
+    /// <summary>Turns on spell check per culture. Same as <c>SpellCheck</c>.</summary>
+    public AzureSearchIndexBuilder SpellCheck(Action<AzureSearchSpellCheckBuilder> configure)
+    {
+        configure(new AzureSearchSpellCheckBuilder(_options.SpellCheck));
         return this;
     }
 
@@ -159,6 +167,24 @@ public sealed class AzureSearchFieldBuilder
     private AzureSearchFieldBuilder Set(Action set)
     {
         set();
+        return this;
+    }
+}
+
+/// <summary>Sets the spell check of one index.</summary>
+public sealed class AzureSearchSpellCheckBuilder
+{
+    private readonly SpellCheckOptions _spellCheck;
+
+    internal AzureSearchSpellCheckBuilder(SpellCheckOptions spellCheck) => _spellCheck = spellCheck;
+
+    /// <summary>
+    /// Corrects queries in a culture (for example <c>en</c> or <c>pt-BR</c>) with the lexicon speller of a query language.
+    /// Same as <c>SpellCheck:Cultures:&lt;culture&gt;</c>.
+    /// </summary>
+    public AzureSearchSpellCheckBuilder Culture(string culture, QueryLanguage queryLanguage)
+    {
+        _spellCheck.Cultures[culture] = queryLanguage.ToString();
         return this;
     }
 }

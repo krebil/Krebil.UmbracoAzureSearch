@@ -13,6 +13,9 @@ public class AzureSearchIndexOptions
     /// <summary>Suggestion settings, under <c>Indexes:&lt;alias&gt;:Suggestions</c>.</summary>
     public SuggestionOptions Suggestions { get; set; } = new();
 
+    /// <summary>Spell check settings, under <c>Indexes:&lt;alias&gt;:SpellCheck</c>. Off by default.</summary>
+    public SpellCheckOptions SpellCheck { get; set; } = new();
+
     /// <summary>Analyzer settings, under <c>Indexes:&lt;alias&gt;:Analyzers</c>.</summary>
     public AnalyzerOptions Analyzers { get; set; } = new();
 

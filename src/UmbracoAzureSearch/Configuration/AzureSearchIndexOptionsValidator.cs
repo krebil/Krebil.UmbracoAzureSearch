@@ -26,6 +26,12 @@ internal sealed class AzureSearchIndexOptionsValidator(IOptions<UmbracoAzureSear
         Umbraco.Cms.Search.Core.Constants.IndexAliases.DraftMembers,
     };
 
+    // The query languages of the Azure lexicon speller (https://learn.microsoft.com/azure/search/speller-how-to-add).
+    private static readonly HashSet<string> SpellerLanguages = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "en", "en-us", "es", "es-es", "fr", "fr-fr", "de", "de-de", "nl", "nl-be", "nl-nl",
+    };
+
     private static readonly HashSet<string> KnownAnalyzers = typeof(LexicalAnalyzerName)
         .GetProperties(BindingFlags.Public | BindingFlags.Static)
         .Where(p => p.PropertyType == typeof(LexicalAnalyzerName))
@@ -56,6 +62,15 @@ internal sealed class AzureSearchIndexOptionsValidator(IOptions<UmbracoAzureSear
         }
 
         ValidateAnalyzers(options.Analyzers, definition, isKnownAnalyzer, failures);
+
+        foreach (var (culture, queryLanguage) in options.SpellCheck.Cultures)
+        {
+            if (!SpellerLanguages.Contains(queryLanguage))
+            {
+                failures.Add($"SpellCheck:Cultures:{culture} is \"{queryLanguage}\", which the Azure lexicon speller does not support. "
+                             + $"Use one of: {string.Join(", ", SpellerLanguages.Order())}.");
+            }
+        }
 
         // The backoffice searches its indexes without a culture, which IndexPerCulture rejects.
         if (definition.IndexPerCulture && name is not null && BackofficeIndexes.Contains(name))
