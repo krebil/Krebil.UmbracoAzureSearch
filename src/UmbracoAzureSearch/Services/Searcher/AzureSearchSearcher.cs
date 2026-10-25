@@ -321,6 +321,20 @@ public class AzureSearchSearcher(
             }
         }
 
+        // The consumer's changes run last, on every Azure query of the index. The package does not validate them.
+        if (definition.Options.SearchConfigurations.Count > 0)
+        {
+            var request = new AzureSearchRequest(indexAlias, physicalIndex.Name, query, culture, segment);
+            foreach (var configure in definition.Options.SearchConfigurations)
+            {
+                configure(searchOptions, request);
+                if (facetSearchOptions is not null)
+                {
+                    configure(facetSearchOptions, request);
+                }
+            }
+        }
+
         // None of the requests depends on another's result, so they run together.
         var mainSearchTask = searchClient.SearchAsync<SearchDocument>(searchText, searchOptions);
         var facetSearchTask = facetSearchOptions is null

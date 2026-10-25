@@ -1,3 +1,6 @@
+using Azure.Search.Documents;
+using Azure.Search.Documents.Indexes.Models;
+
 namespace UmbracoAzureSearch.Models;
 
 /// <summary>
@@ -33,4 +36,16 @@ public class AzureSearchIndexOptions
 
     /// <summary>The <c>IContentIndexer</c> types that run for this index only. Code only.</summary>
     public IReadOnlyList<Type> Indexers { get; internal set; } = [];
+
+    /// <summary>
+    /// Changes to the Azure index definition, run after the package builds it, for every Azure index of the alias.
+    /// The package does not validate them. Code only.
+    /// </summary>
+    public IReadOnlyList<Action<SearchIndex, AzureSearchIndexContext>> IndexConfigurations { get; internal set; } = [];
+
+    /// <summary>
+    /// Changes to each Azure query, run after the package sets its own search options. The package does not validate them.
+    /// Code only.
+    /// </summary>
+    public IReadOnlyList<Action<SearchOptions, AzureSearchRequest>> SearchConfigurations { get; internal set; } = [];
 }
