@@ -87,6 +87,23 @@ public class AzureSearchIndexer(
         IReadOnlyCollection<IndexField> fields,
         ContentProtection? protection)
     {
+        // Zero-downtime rebuild: during a rebuild the old and the new index both get the write.
+        foreach (var target in await serviceProvider.GetRequiredService<IndexSlots>().WriteTargetsAsync(physicalIndex.Name, definition))
+        {
+            await WriteToIndexAsync(indexAlias, physicalIndex with { Name = target }, definition, id, objectType, variations, fields, protection);
+        }
+    }
+
+    private async Task WriteToIndexAsync(
+        string indexAlias,
+        PhysicalIndex physicalIndex,
+        IndexDefinition definition,
+        Guid id,
+        UmbracoObjectTypes objectType,
+        Variation[] variations,
+        IReadOnlyCollection<IndexField> fields,
+        ContentProtection? protection)
+    {
         var searchClient = azureSearchClientFactory.GetSearchIndexClient().GetSearchClient(physicalIndex.Name);
 
         var mappingResult = documentMapper.MapToDocuments(id, objectType, variations, fields, protection, definition);
@@ -267,13 +284,16 @@ public class AzureSearchIndexer(
         var idList = ids.ToArray();
         foreach (var physicalIndex in await serviceProvider.GetRequiredService<PhysicalIndexes>().AllAsync(indexAlias, definition))
         {
-            try
+            foreach (var target in await serviceProvider.GetRequiredService<IndexSlots>().WriteTargetsAsync(physicalIndex.Name, definition))
             {
-                await DeleteAsync(indexAlias, azureSearchClientFactory.GetSearchIndexClient().GetSearchClient(physicalIndex.Name), idList);
-            }
-            catch (RequestFailedException ex) when (ex.Status == 404 && definition.IndexPerCulture)
-            {
-                // A fallback index that does not exist yet holds nothing to delete.
+                try
+                {
+                    await DeleteAsync(indexAlias, azureSearchClientFactory.GetSearchIndexClient().GetSearchClient(target), idList);
+                }
+                catch (RequestFailedException ex) when (ex.Status == 404 && definition.IndexPerCulture)
+                {
+                    // A fallback index that does not exist yet holds nothing to delete.
+                }
             }
         }
     }
@@ -341,7 +361,8 @@ public class AzureSearchIndexer(
             {
                 try
                 {
-                    var response = await indexClient.GetIndexStatisticsAsync(physicalIndex.Name);
+                    var liveIndex = await serviceProvider.GetRequiredService<IndexSlots>().LiveAsync(physicalIndex.Name, definition);
+                    var response = await indexClient.GetIndexStatisticsAsync(liveIndex);
                     documentCount += response.Value.DocumentCount;
                 }
                 catch (RequestFailedException ex) when (ex.Status == 404 && definition.IndexPerCulture)

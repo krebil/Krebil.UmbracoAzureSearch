@@ -174,7 +174,7 @@ With automatic fields on, the other fields depend on the content, so the package
 ## Gotchas
 
 - Azure cannot remove a field or change its attributes. Turning automatic fields off on an existing index, or changing filterable, facetable, sortable, searchable or the analyzer of an existing field, needs a rebuild.
-- A rebuild reuses the cached `umbracoIndexDocument` rows that Umbraco Search stores for each content item. Fields from per-index indexers are not cached, so a rebuild runs them again. A later version adds `ClearDocumentCacheOnRebuild` to refresh the cached rows.
+- A rebuild reuses the cached `umbracoIndexDocument` rows that Umbraco Search stores for each content item. Fields from per-index indexers are not cached, so a rebuild runs them again. Set [`ClearDocumentCacheOnRebuild`](zero-downtime-rebuild.md#cleardocumentcacheonrebuild) to refresh the cached rows on a rebuild.
 - With automatic fields off, opt in every field the Delivery API filters or sorts on. Otherwise its queries fail or return nothing.
 - Content scope and per-index indexers are code only.
 - A document that leaves the scope after a configuration change stays in the index until the next rebuild.
