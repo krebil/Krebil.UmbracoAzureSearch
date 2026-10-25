@@ -3,6 +3,8 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Umbraco.Cms.Search.Core.Configuration;
 using UmbracoAzureSearch.Models;
+using UmbracoAzureSearch.Services.Indexer;
+using UmbracoAzureSearch.Services.IndexManager;
 
 namespace UmbracoAzureSearch.Configuration;
 
@@ -15,9 +17,10 @@ internal sealed class AzureSearchIndexStartupCheck(
     IOptions<IndexOptions> indexOptions,
     IOptions<UmbracoAzureSearchOptions> azureSearchOptions,
     IOptionsMonitor<AzureSearchIndexOptions> azureSearchIndexOptions,
+    PhysicalIndexes physicalIndexes,
     ILogger<AzureSearchIndexStartupCheck> logger) : IHostedService
 {
-    public Task StartAsync(CancellationToken cancellationToken)
+    public async Task StartAsync(CancellationToken cancellationToken)
     {
         LogLegacySuggestions();
 
@@ -32,13 +35,50 @@ internal sealed class AzureSearchIndexStartupCheck(
             CheckIndex(alias, $"ConfigureAzureSearchIndex(\"{alias}\")", errors);
         }
 
+        if (errors.Count == 0)
+        {
+            await CheckIndexCountAsync(errors);
+        }
+
         if (errors.Count > 0)
         {
             throw new InvalidOperationException(
                 $"The Azure AI Search index configuration is invalid:{Environment.NewLine}- {string.Join($"{Environment.NewLine}- ", errors.Distinct())}");
         }
+    }
 
-        return Task.CompletedTask;
+    // IndexPerCulture multiplies the Azure indexes of an alias, so the total is checked against the tier once an index uses it.
+    private async Task CheckIndexCountAsync(List<string> errors)
+    {
+        var aliases = indexOptions.Value.GetContentIndexRegistrations().Select(r => r.IndexAlias)
+            .Concat(sources.AppSettingsAliases.Concat(sources.CodeAliases).Select(RegisteredAlias).OfType<string>())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var definitions = aliases.Select(alias => (Alias: alias, Definition: new IndexDefinition(azureSearchIndexOptions.Get(alias)))).ToArray();
+        if (!definitions.Any(d => d.Definition.IndexPerCulture))
+            return;
+
+        var counts = new List<string>();
+        var total = 0;
+        foreach (var (alias, definition) in definitions)
+        {
+            var count = 1;
+            if (definition.IndexPerCulture)
+            {
+                // Unknown languages count the fallback index, so the check errs on the safe side.
+                count = definition.Options.Analyzers.Cultures.Count + (await physicalIndexes.FallbackNeededAsync(definition) is false ? 0 : 1);
+            }
+
+            total += count;
+            counts.Add($"{alias}: {count}");
+        }
+
+        var maxIndexes = azureSearchOptions.Value.MaxIndexes;
+        if (total > maxIndexes)
+        {
+            errors.Add($"The Umbraco indexes need {total} Azure indexes ({string.Join(", ", counts)}), but the service allows {maxIndexes} "
+                       + $"({UmbracoAzureSearchOptions.Name}:MaxIndexes). Map fewer cultures, or use FieldPerCulture.");
+        }
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;

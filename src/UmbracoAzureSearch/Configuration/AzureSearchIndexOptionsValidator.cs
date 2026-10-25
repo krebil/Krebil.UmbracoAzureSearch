@@ -19,6 +19,13 @@ internal sealed class AzureSearchIndexOptionsValidator(IOptions<UmbracoAzureSear
     // The Umbraco system fields: ten keyword, number or date fields with a sortable copy, and Umb_Name with four text fields and a sortable copy.
     internal const int SystemFieldCount = 25;
 
+    private static readonly HashSet<string> BackofficeIndexes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        Umbraco.Cms.Search.Core.Constants.IndexAliases.DraftContent,
+        Umbraco.Cms.Search.Core.Constants.IndexAliases.DraftMedia,
+        Umbraco.Cms.Search.Core.Constants.IndexAliases.DraftMembers,
+    };
+
     private static readonly HashSet<string> KnownAnalyzers = typeof(LexicalAnalyzerName)
         .GetProperties(BindingFlags.Public | BindingFlags.Static)
         .Where(p => p.PropertyType == typeof(LexicalAnalyzerName))
@@ -47,6 +54,12 @@ internal sealed class AzureSearchIndexOptionsValidator(IOptions<UmbracoAzureSear
 
         ValidateAnalyzers(options.Analyzers, definition, failures);
 
+        // The backoffice searches its indexes without a culture, which IndexPerCulture rejects.
+        if (definition.IndexPerCulture && name is not null && BackofficeIndexes.Contains(name))
+        {
+            failures.Add($"Analyzers:Mode IndexPerCulture is not allowed on the backoffice index \"{name}\". Use FieldPerCulture.");
+        }
+
         // With automatic fields on, the fields depend on the content, so only the fields the definition fixes are counted.
         var fieldCount = CountFields(options, definition);
         var maxFields = azureSearchOptions.Value.MaxFieldsPerIndex;
@@ -73,18 +86,21 @@ internal sealed class AzureSearchIndexOptionsValidator(IOptions<UmbracoAzureSear
             CheckKnown($"{key}:SuggestionAnalyzer", analyzers.SuggestionAnalyzer);
         }
 
-        if (!definition.FieldPerCulture)
+        if (!definition.FieldPerCulture && !definition.IndexPerCulture)
             return;
 
         if (analyzers.Cultures.Count == 0)
         {
-            failures.Add($"{key}:Mode is FieldPerCulture, but {key}:Cultures maps no culture. Map at least one culture to an analyzer.");
+            failures.Add($"{key}:Mode is {analyzers.Mode}, but {key}:Cultures maps no culture. Map at least one culture to an analyzer.");
         }
 
-        // Azure rejects suggester fields with other analyzers.
+        // Azure rejects suggester fields with other analyzers. IndexPerCulture has one suggestion field per culture index.
         if (definition.Options.Suggestions.Enabled)
         {
-            foreach (var field in IndexSchema.SuggestionFields(definition))
+            var suggestionFields = definition.IndexPerCulture
+                ? analyzers.Cultures.Values.SelectMany(analyzer => IndexSchema.SuggestionFields(definition.For(analyzer)))
+                : IndexSchema.SuggestionFields(definition);
+            foreach (var field in suggestionFields.DistinctBy(f => (f.Name, f.AnalyzerName?.ToString())))
             {
                 var analyzer = field.AnalyzerName?.ToString();
                 if (analyzer is not null && KnownAnalyzers.Contains(analyzer) && !IsSuggestionAnalyzer(analyzer))

@@ -27,6 +27,12 @@ public class UmbracoAzureSearchOptions
     /// </summary>
     public int MaxFieldsPerIndex { get; set; } = 1000;
 
+    /// <summary>
+    /// The most indexes Azure allows on this service: 15 on Basic, 50 on S1, 200 on S2 and S3. Startup validation checks
+    /// the Azure indexes of all Umbraco indexes against it when an index uses <c>IndexPerCulture</c>.
+    /// </summary>
+    public int MaxIndexes { get; set; } = 15;
+
     // Keyed by Umbraco index alias (before the environment suffix); an alias without an entry uses the defaults.
     [Obsolete("Use UmbracoAzureSearch:Indexes:<alias>:Suggestions or ConfigureAzureSearchIndex. This location is read while the new one is unset.")]
     public Dictionary<string, SuggestionOptions> Suggestions { get; set; } = new(StringComparer.OrdinalIgnoreCase);

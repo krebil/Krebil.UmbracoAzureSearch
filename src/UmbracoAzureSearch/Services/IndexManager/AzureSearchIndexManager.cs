@@ -1,5 +1,7 @@
+using Azure;
 using Azure.Search.Documents.Indexes;
 using Azure.Search.Documents.Indexes.Models;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Throw;
@@ -18,15 +20,16 @@ public class AzureSearchIndexManager(
     IAzureSearchClientFactory azureSearchClientFactory,
     IOptions<UmbracoAzureSearchOptions> azureSearchOptions,
     IOptionsMonitor<AzureSearchIndexOptions> azureSearchIndexOptions,
-    ILogger<AzureSearchIndexManager> logger)
+    ILogger<AzureSearchIndexManager> logger,
+    IServiceProvider serviceProvider)
     : UmbracoAzureServiceBase(serverRoleAccessor), IAzureSearchIndexManager
 {
+    private readonly PhysicalIndexes physicalIndexes = serviceProvider.GetRequiredService<PhysicalIndexes>();
+
     public async Task EnsureAsync(string indexAlias)
     {
         if (ShouldNotManipulateIndexes())
             return;
-        var umbracoIndexAlias = indexAlias;
-        indexAlias = indexAliasResolver.Resolve(indexAlias);
         var searchIndexClient = azureSearchClientFactory.GetSearchIndexClient();
         var indexNames = new HashSet<string>();
         if (azureSearchOptions.Value.IsServerless)
@@ -44,14 +47,27 @@ public class AzureSearchIndexManager(
                 indexNames.Add(existingIndexName);
             }
         }
-        var definition = new IndexDefinition(azureSearchIndexOptions.Get(umbracoIndexAlias));
-        if (indexNames.Contains(indexAlias))
+        var definition = new IndexDefinition(azureSearchIndexOptions.Get(indexAlias));
+        foreach (var physicalIndex in await physicalIndexes.AllAsync(indexAlias, definition))
         {
-            await UpdateExistingIndexAsync(searchIndexClient, indexAlias, definition);
-            return;
+            var physicalDefinition = definition.For(physicalIndex.Analyzer);
+            if (indexNames.Contains(physicalIndex.Name))
+            {
+                await UpdateExistingIndexAsync(searchIndexClient, physicalIndex.Name, physicalDefinition);
+                continue;
+            }
+
+            await searchIndexClient.CreateIndexAsync(IndexSchema.Build(physicalIndex.Name, physicalDefinition));
+
+            // A fallback index added next to existing culture indexes is new because Umbraco got a language outside the map.
+            if (definition.IndexPerCulture && physicalIndex == physicalIndexes.Fallback(indexAlias)
+                && indexNames.Any(name => name.StartsWith($"{indexAliasResolver.Resolve(indexAlias)}-", StringComparison.Ordinal)))
+            {
+                logger.LogWarning(
+                    "Rebuild required for index {IndexAlias}: Umbraco has a language outside the culture map, so the fallback index {IndexName} was created. Rebuild the index to fill it.",
+                    indexAlias, physicalIndex.Name);
+            }
         }
-        var newIndex = BuildIndex(indexAlias, definition);
-        await searchIndexClient.CreateIndexAsync(newIndex);
     }
 
     public async Task ResetAsync(string indexAlias)
@@ -60,13 +76,23 @@ public class AzureSearchIndexManager(
             return;
         var indexClient = azureSearchClientFactory.GetSearchIndexClient();
         var definition = new IndexDefinition(azureSearchIndexOptions.Get(indexAlias));
-        indexAlias = indexAliasResolver.Resolve(indexAlias);
-        var index = await indexClient.GetIndexAsync(indexAlias);
-        index.ThrowIfNull();
-        await indexClient.DeleteIndexAsync(index);
-        // Recreate from code, not from the old definition, so a rebuild also applies schema changes such as
-        // suggestions. Property fields come back as the rebuild indexes documents (see EnsureFieldsExist).
-        await indexClient.CreateIndexAsync(BuildIndex(indexAlias, definition));
+
+        // All indexes of one alias rebuild together.
+        foreach (var physicalIndex in await physicalIndexes.AllAsync(indexAlias, definition))
+        {
+            try
+            {
+                await indexClient.DeleteIndexAsync(physicalIndex.Name, CancellationToken.None);
+            }
+            catch (RequestFailedException ex) when (ex.Status == 404)
+            {
+                // A fallback index that did not exist yet.
+            }
+
+            // Recreate from code, not from the old definition, so a rebuild also applies schema changes such as
+            // suggestions. Property fields come back as the rebuild indexes documents (see EnsureFieldsExist).
+            await indexClient.CreateIndexAsync(IndexSchema.Build(physicalIndex.Name, definition.For(physicalIndex.Analyzer)));
+        }
     }
 
     // An existing index gets the fields its definition adds without a rebuild: suggestions on indexes created before
@@ -101,78 +127,5 @@ public class AzureSearchIndexManager(
 
         IndexSchema.AddSuggestions(index, definition);
         return true;
-    }
-
-    // The index definition in code; EnsureAsync and ResetAsync both create indexes from it.
-    private static SearchIndex BuildIndex(string indexName, IndexDefinition definition)
-    {
-        var newIndex = new SearchIndex(indexName, [
-            new SearchField(IndexConstants.FieldNames.Id,  SearchFieldDataType.String)
-            {
-                IsKey = true,
-                IsSortable = true
-            },
-            new SearchField(IndexConstants.FieldNames.Key, SearchFieldDataType.String)
-            {
-                IsFilterable = true,
-                IsSortable = true
-            },
-            new SearchField(IndexConstants.FieldNames.ObjectType, SearchFieldDataType.String)
-            {
-                IsFilterable = true
-            },
-            new SearchField(IndexConstants.FieldNames.Culture, SearchFieldDataType.String)
-            {
-                IsFilterable = true
-            },
-            new SearchField(IndexConstants.FieldNames.Segment, SearchFieldDataType.String)
-            {
-                IsFilterable = true
-            },
-            new SearchField(IndexConstants.FieldNames.AccessKeys, SearchFieldDataType.Collection(SearchFieldDataType.String))
-            {
-                IsFilterable = true
-            },
-            new SearchField(IndexConstants.FieldNames.AllTexts, SearchFieldDataType.Collection(SearchFieldDataType.String))
-            {
-                IsSearchable = true,
-                IsFilterable = false,
-                IsFacetable = false
-            },
-            new SearchField(IndexConstants.FieldNames.AllTextsR1, SearchFieldDataType.Collection(SearchFieldDataType.String))
-            {
-                IsSearchable = true,
-                IsFilterable = false,
-                IsFacetable = false
-            },
-            new SearchField(IndexConstants.FieldNames.AllTextsR2, SearchFieldDataType.Collection(SearchFieldDataType.String))
-            {
-                IsSearchable = true,
-                IsFilterable = false,
-                IsFacetable = false
-            },
-            new SearchField(IndexConstants.FieldNames.AllTextsR3, SearchFieldDataType.Collection(SearchFieldDataType.String))
-            {
-                IsSearchable = true,
-                IsFilterable = false,
-                IsFacetable = false
-            }
-        ]);
-
-        foreach (var copy in IndexSchema.CopyFields(definition))
-        {
-            newIndex.Fields.Add(copy);
-        }
-
-        if (definition.Options.Suggestions.Enabled)
-        {
-            IndexSchema.AddSuggestions(newIndex, definition);
-        }
-
-        // Scoring profile to boost text relevance fields (R1 > R2 > R3 > base), copies included
-        newIndex.ScoringProfiles.Add(IndexSchema.RelevanceProfile(newIndex.Fields.Select(f => f.Name)));
-        newIndex.DefaultScoringProfile = IndexSchema.RelevanceProfileName;
-
-        return newIndex;
     }
 }
