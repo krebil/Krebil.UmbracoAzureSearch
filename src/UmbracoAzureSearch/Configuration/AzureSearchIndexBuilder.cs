@@ -140,6 +140,12 @@ public sealed class AzureSearchAnalyzerBuilder
     /// <summary>One copy of the text fields per mapped culture, plus an invariant copy. Same as <c>Mode: FieldPerCulture</c>.</summary>
     public AzureSearchAnalyzerBuilder FieldPerCulture() => Set(() => _analyzers.Mode = AnalyzerMode.FieldPerCulture);
 
+    /// <summary>
+    /// One physical index per mapped culture, plus a fallback index for languages outside the map.
+    /// Same as <c>Mode: IndexPerCulture</c>.
+    /// </summary>
+    public AzureSearchAnalyzerBuilder IndexPerCulture() => Set(() => _analyzers.Mode = AnalyzerMode.IndexPerCulture);
+
     /// <summary>Maps a culture key (for example <c>fr</c> or <c>pt-BR</c>) to an analyzer. Same as <c>Cultures:&lt;key&gt;</c>.</summary>
     public AzureSearchAnalyzerBuilder Culture(string culture, LexicalAnalyzerName analyzer)
         => Set(() => _analyzers.Cultures[culture] = analyzer.ToString());

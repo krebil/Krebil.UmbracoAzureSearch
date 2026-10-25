@@ -1,3 +1,4 @@
+using Azure;
 using System.Collections.Concurrent;
 using Azure.Search.Documents;
 using Azure.Search.Documents.Indexes.Models;
@@ -60,14 +61,40 @@ public class AzureSearchIndexer(
 
         fieldList = await AddIndexerFieldsAsync(indexAlias, definition, id, objectType, variationList, fieldList);
 
-        var searchClient = azureSearchClientFactory.GetSearchClient(indexAlias);
+        // IndexPerCulture: each culture goes to its own index, invariant documents to every index of the alias.
+        var physicalIndexes = serviceProvider.GetRequiredService<PhysicalIndexes>();
+        var all = definition.IndexPerCulture ? await physicalIndexes.AllAsync(indexAlias, definition) : [];
+        var targets = variationList
+            .SelectMany(variation => (variation.Culture is null && definition.IndexPerCulture
+                    ? all
+                    : [physicalIndexes.ForCulture(indexAlias, definition, variation.Culture ?? string.Empty)])
+                .Select(physicalIndex => (PhysicalIndex: physicalIndex, Variation: variation)))
+            .GroupBy(t => t.PhysicalIndex, t => t.Variation);
 
-        var mappingResult = documentMapper.MapToDocuments(id, objectType, variationList, fieldList, protection, definition);
+        foreach (var target in targets)
+        {
+            await WriteAsync(indexAlias, target.Key, definition.For(target.Key.Analyzer), id, objectType, target.ToArray(), fieldList, protection);
+        }
+    }
 
-        var indexFields = await EnsureFieldsExist(indexAlias, mappingResult.FieldMappings, definition);
-        DropMissingSuggestionCopies(indexAlias, mappingResult.Documents, indexFields);
+    private async Task WriteAsync(
+        string indexAlias,
+        PhysicalIndex physicalIndex,
+        IndexDefinition definition,
+        Guid id,
+        UmbracoObjectTypes objectType,
+        Variation[] variations,
+        IReadOnlyCollection<IndexField> fields,
+        ContentProtection? protection)
+    {
+        var searchClient = azureSearchClientFactory.GetSearchIndexClient().GetSearchClient(physicalIndex.Name);
+
+        var mappingResult = documentMapper.MapToDocuments(id, objectType, variations, fields, protection, definition);
+
+        var indexFields = await EnsureFieldsExist(physicalIndex.Name, mappingResult.FieldMappings, definition);
+        DropMissingSuggestionCopies(physicalIndex.Name, mappingResult.Documents, indexFields);
         var batch = IndexDocumentsBatch.MergeOrUpload(mappingResult.Documents);
-        logger.LogDebug("Indexing {DocumentCount} document(s) for {Id} into {IndexAlias}", mappingResult.Documents.Count, id, indexAlias);
+        logger.LogDebug("Indexing {DocumentCount} document(s) for {Id} into {IndexAlias} ({IndexName})", mappingResult.Documents.Count, id, indexAlias, physicalIndex.Name);
         var result = await searchClient.IndexDocumentsAsync(batch, new IndexDocumentsOptions { ThrowOnAnyError = false });
         var failed = result.Value.Results.Where(r => !r.Succeeded).ToList();
         if (failed.Count > 0)
@@ -145,11 +172,20 @@ public class AzureSearchIndexer(
         static string Identifier(IndexField field) => $"{field.FieldName}|{field.Culture}|{field.Segment}";
     }
 
-    private async Task<HashSet<string>> EnsureFieldsExist(string indexAlias, List<IndexFieldMapping> fieldMappings, IndexDefinition definition)
+    private async Task<HashSet<string>> EnsureFieldsExist(string indexName, List<IndexFieldMapping> fieldMappings, IndexDefinition definition)
     {
-        indexAlias = indexAliasResolver.Resolve(indexAlias);
         var indexClient = azureSearchClientFactory.GetSearchIndexClient();
-        var index = await indexClient.GetIndexAsync(indexAlias);
+        Response<SearchIndex> index;
+        try
+        {
+            index = await indexClient.GetIndexAsync(indexName);
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404 && definition.IndexPerCulture)
+        {
+            // The fallback index of IndexPerCulture, for the first document of a language outside the map.
+            logger.LogWarning("Creating index {IndexName} for a culture outside the culture map. Rebuild the index to fill it with existing content.", indexName);
+            index = await indexClient.CreateIndexAsync(IndexSchema.Build(indexName, definition));
+        }
         index.ThrowIfNull();
 
         // The per-culture aggregate copies of a culture added to the definition
@@ -176,7 +212,7 @@ public class AzureSearchIndexer(
 
     // Azure adds fields to a suggester only when it creates the suggester, so a suggestion copy of a culture added
     // after the index was created waits for a rebuild. Writing it before would fail the whole document.
-    private void DropMissingSuggestionCopies(string indexAlias, List<SearchDocument> documents, HashSet<string> indexFields)
+    private void DropMissingSuggestionCopies(string indexName, List<SearchDocument> documents, HashSet<string> indexFields)
     {
         var prefix = $"{IndexConstants.FieldNames.Suggestion}_";
         var missing = documents.SelectMany(d => d.Keys)
@@ -193,11 +229,11 @@ public class AzureSearchIndexer(
             }
         }
 
-        if (_missingSuggestionCopyWarnings.TryAdd(indexAlias, true))
+        if (_missingSuggestionCopyWarnings.TryAdd(indexName, true))
         {
             logger.LogWarning(
-                "Index {IndexAlias} has no suggestion fields {Fields}. Rebuild the index to add them.",
-                indexAlias, string.Join(", ", missing.Order()));
+                "Index {IndexName} has no suggestion fields {Fields}. Rebuild the index to add them.",
+                indexName, string.Join(", ", missing.Order()));
         }
     }
 
@@ -225,8 +261,23 @@ public class AzureSearchIndexer(
         if (ShouldNotManipulateIndexes())
             return;
 
-        var searchClient = azureSearchClientFactory.GetSearchClient(indexAlias);
+        var definition = new IndexDefinition(azureSearchIndexOptions.Get(indexAlias));
+        var idList = ids.ToArray();
+        foreach (var physicalIndex in await serviceProvider.GetRequiredService<PhysicalIndexes>().AllAsync(indexAlias, definition))
+        {
+            try
+            {
+                await DeleteAsync(indexAlias, azureSearchClientFactory.GetSearchIndexClient().GetSearchClient(physicalIndex.Name), idList);
+            }
+            catch (RequestFailedException ex) when (ex.Status == 404 && definition.IndexPerCulture)
+            {
+                // A fallback index that does not exist yet holds nothing to delete.
+            }
+        }
+    }
 
+    private async Task DeleteAsync(string indexAlias, SearchClient searchClient, Guid[] ids)
+    {
         // Need to find all document IDs (which include culture and segment) for documents
         // that have any of the given IDs in their path (cascade delete for all descendants)
         var pathIdFilters = ids.Select(id => $"{Umbraco.Cms.Search.Core.Constants.FieldNames.PathIds}{IndexConstants.FieldTypePostfix.Keywords}/any(p: p eq '{id:D}')");
@@ -277,14 +328,26 @@ public class AzureSearchIndexer(
 
     public async Task<IndexMetadata> GetMetadataAsync(string indexAlias)
     {
-        // use GetSearchClient to get the resolved index name (alias resolution happens inside the factory)
-        var resolvedIndexName = azureSearchClientFactory.GetSearchClient(indexAlias).IndexName;
         var indexClient = azureSearchClientFactory.GetSearchIndexClient();
 
         try
         {
-            var response = await indexClient.GetIndexStatisticsAsync(resolvedIndexName);
-            var documentCount = response.Value.DocumentCount;
+            // IndexPerCulture: the documents of every index of the alias. Invariant documents count once per index.
+            var definition = new IndexDefinition(azureSearchIndexOptions.Get(indexAlias));
+            long documentCount = 0;
+            foreach (var physicalIndex in await serviceProvider.GetRequiredService<PhysicalIndexes>().AllAsync(indexAlias, definition))
+            {
+                try
+                {
+                    var response = await indexClient.GetIndexStatisticsAsync(physicalIndex.Name);
+                    documentCount += response.Value.DocumentCount;
+                }
+                catch (RequestFailedException ex) when (ex.Status == 404 && definition.IndexPerCulture)
+                {
+                    // A fallback index that does not exist yet.
+                }
+            }
+
             var healthStatus = documentCount > 0 ? HealthStatus.Healthy : HealthStatus.Empty;
             return new IndexMetadata(documentCount, healthStatus, IndexConstants.ProviderIdentifier);
         }
