@@ -155,7 +155,8 @@ internal static class IndexSchema
     {
         var changed = false;
         var liveFields = live.Fields.Select(f => f.Name).ToHashSet();
-        foreach (var field in desired.Fields.Where(f => !liveFields.Contains(f.Name)))
+        // Suggestion fields belong to the suggester, which Azure only creates with its fields.
+        foreach (var field in desired.Fields.Where(f => !liveFields.Contains(f.Name) && !IsSuggestionField(f.Name)))
         {
             live.Fields.Add(field);
             changed = true;
@@ -185,6 +186,100 @@ internal static class IndexSchema
 
         return changed;
     }
+
+    // The value and sort postfixes of an Umbraco field, longest first so "_texts_r1" wins over "_texts".
+    private static readonly (string Postfix, bool Text, bool Sort)[] FieldPostfixes =
+    [
+        (IndexConstants.FieldTypePostfix.TextsR1, true, false),
+        (IndexConstants.FieldTypePostfix.TextsR2, true, false),
+        (IndexConstants.FieldTypePostfix.TextsR3, true, false),
+        ($"{IndexConstants.FieldTypePostfix.Texts}{IndexConstants.FieldTypePostfix.Sortable}", false, true),
+        ($"{IndexConstants.FieldTypePostfix.Keywords}{IndexConstants.FieldTypePostfix.Sortable}", false, true),
+        ($"{IndexConstants.FieldTypePostfix.Integers}{IndexConstants.FieldTypePostfix.Sortable}", false, true),
+        ($"{IndexConstants.FieldTypePostfix.Decimals}{IndexConstants.FieldTypePostfix.Sortable}", false, true),
+        ($"{IndexConstants.FieldTypePostfix.DateTimeOffsets}{IndexConstants.FieldTypePostfix.Sortable}", false, true),
+        (IndexConstants.FieldTypePostfix.Texts, true, false),
+        (IndexConstants.FieldTypePostfix.Keywords, false, false),
+        (IndexConstants.FieldTypePostfix.Integers, false, false),
+        (IndexConstants.FieldTypePostfix.Decimals, false, false),
+        (IndexConstants.FieldTypePostfix.DateTimeOffsets, false, false),
+    ];
+
+    /// <summary>
+    /// The differences between a live index and the index built from code that Azure cannot apply to a live index:
+    /// analyzers of existing fields, suggester fields, attributes of existing fields, fields that automatic fields off or
+    /// a field opt-in leaves out, and analyzers or other text analysis that ConfigureIndex adds.
+    /// </summary>
+    public static IEnumerable<string> RebuildRequired(SearchIndex live, SearchIndex desired, IndexDefinition definition)
+    {
+        var desiredFields = desired.Fields.ToDictionary(f => f.Name);
+        foreach (var field in live.Fields)
+        {
+            if (desiredFields.TryGetValue(field.Name, out var wanted))
+            {
+                if (AnalyzerOf(field) != AnalyzerOf(wanted))
+                    yield return $"the analyzer of field {field.Name} is {AnalyzerOf(field)}, and the definition sets {AnalyzerOf(wanted)}";
+                continue;
+            }
+
+            // A field of an Umbraco field, added as documents brought it: compare it with what the definition gives it now.
+            if (ParseField(field.Name) is not { } parsed)
+                continue;
+
+            var resolved = definition.Resolve(parsed.FieldName);
+            if (resolved is null)
+            {
+                yield return $"field {field.Name} is in the index, and the definition leaves {parsed.FieldName} out (automatic fields off, not opted in)";
+                continue;
+            }
+
+            if (parsed.Sort ? !resolved.Sortable : parsed.Text ? !resolved.Searchable : !resolved.Filterable && !resolved.Facetable)
+            {
+                yield return $"field {field.Name} is in the index, and the definition no longer gives {parsed.FieldName} that attribute";
+                continue;
+            }
+
+            if (parsed.Text && AnalyzerOf(field) != (resolved.Analyzer ?? LexicalAnalyzerName.StandardLucene.ToString()))
+                yield return $"the analyzer of field {field.Name} is {AnalyzerOf(field)}, and the definition sets {resolved.Analyzer ?? "standard.lucene"}";
+            else if (!parsed.Sort && !parsed.Text && (field.IsFilterable != resolved.Filterable || field.IsFacetable != resolved.Facetable))
+                yield return $"field {field.Name} is filterable {field.IsFilterable} and facetable {field.IsFacetable}, and the definition sets {resolved.Filterable} and {resolved.Facetable}";
+        }
+
+        var liveSuggester = live.Suggesters.FirstOrDefault(s => s.Name == IndexConstants.SuggesterName);
+        var desiredSuggester = desired.Suggesters.FirstOrDefault(s => s.Name == IndexConstants.SuggesterName);
+        if (liveSuggester is not null && desiredSuggester is not null
+            && !liveSuggester.SourceFields.Order().SequenceEqual(desiredSuggester.SourceFields.Order()))
+        {
+            yield return $"the suggester fields are {string.Join(", ", liveSuggester.SourceFields)}, and the definition sets {string.Join(", ", desiredSuggester.SourceFields)}";
+        }
+
+        foreach (var name in Missing(live.Analyzers.Select(a => a.Name), desired.Analyzers.Select(a => a.Name))
+                     .Concat(Missing(live.Tokenizers.Select(t => t.Name), desired.Tokenizers.Select(t => t.Name)))
+                     .Concat(Missing(live.TokenFilters.Select(t => t.Name), desired.TokenFilters.Select(t => t.Name)))
+                     .Concat(Missing(live.CharFilters.Select(c => c.Name), desired.CharFilters.Select(c => c.Name))))
+        {
+            yield return $"the text analysis component {name} is new in the definition";
+        }
+
+        static IEnumerable<string> Missing(IEnumerable<string> live, IEnumerable<string> desired) => desired.Except(live);
+    }
+
+    private static (string FieldName, bool Text, bool Sort)? ParseField(string physicalName)
+    {
+        foreach (var (postfix, text, sort) in FieldPostfixes)
+        {
+            if (physicalName.Length > postfix.Length && physicalName.EndsWith(postfix, StringComparison.Ordinal))
+                return (physicalName[..^postfix.Length], text, sort);
+        }
+
+        return null;
+    }
+
+    private static string AnalyzerOf(SearchField field)
+        => field.IsSearchable is true ? field.AnalyzerName?.ToString() ?? LexicalAnalyzerName.StandardLucene.ToString() : "none";
+
+    private static bool IsSuggestionField(string name)
+        => name == IndexConstants.FieldNames.Suggestion || name.StartsWith($"{IndexConstants.FieldNames.Suggestion}_", StringComparison.Ordinal);
 
     private static string Json<T>(T model) where T : IPersistableModel<T> => ModelReaderWriter.Write(model).ToString();
 

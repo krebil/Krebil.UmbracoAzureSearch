@@ -139,7 +139,8 @@ public class AzureSearchSearcher(
 
         // Each Umbraco field maps to the value fields the index has for it. An index without a field cannot select it.
         var indexFields = selectNames.Length > 0
-            ? await serviceProvider.GetRequiredService<IndexFieldNames>().GetAsync(physicalIndex.Name)
+            ? await serviceProvider.GetRequiredService<IndexFieldNames>().GetAsync(
+                await serviceProvider.GetRequiredService<IndexSlots>().LiveAsync(physicalIndex.Name, definition))
             : [];
         var selected = selectNames.ToDictionary(
             name => name,

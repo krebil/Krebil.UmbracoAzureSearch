@@ -23,6 +23,7 @@ internal sealed class AzureSearchIndexStartupCheck(
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         LogLegacySuggestions();
+        LogServerlessRebuild();
 
         var errors = new List<string>();
         foreach (var alias in sources.AppSettingsAliases)
@@ -109,6 +110,23 @@ internal sealed class AzureSearchIndexStartupCheck(
         => indexOptions.Value.GetIndexRegistration(alias)?.IndexAlias
            ?? indexOptions.Value.GetContentIndexRegistrations()
                .FirstOrDefault(r => string.Equals(r.IndexAlias, alias, StringComparison.OrdinalIgnoreCase))?.IndexAlias;
+
+    // Serverless services have no aliases, so the option is ignored there.
+    private void LogServerlessRebuild()
+    {
+        if (!azureSearchOptions.Value.IsServerless)
+            return;
+
+        foreach (var alias in sources.AppSettingsAliases.Concat(sources.CodeAliases).Select(RegisteredAlias).OfType<string>().Distinct())
+        {
+            if (azureSearchIndexOptions.Get(alias).ZeroDowntimeRebuild)
+            {
+                logger.LogWarning(
+                    "ZeroDowntimeRebuild has no effect for {IndexAlias}: serverless services do not support index aliases, so rebuilds work as without the option",
+                    alias);
+            }
+        }
+    }
 
     private void LogLegacySuggestions()
     {

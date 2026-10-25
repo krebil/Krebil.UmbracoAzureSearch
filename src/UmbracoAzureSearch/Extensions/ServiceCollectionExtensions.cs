@@ -1,6 +1,9 @@
 using Azure.Core;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Umbraco.Cms.Core.Events;
+using Umbraco.Cms.Search.Core.Notifications;
 using Microsoft.Extensions.Options;
 using UmbracoAzureSearch.Configuration;
 using Throw;
@@ -50,6 +53,7 @@ public static class ServiceCollectionExtensions
             .AddSingleton<PhysicalIndexes>()
             .AddSingleton<IndexFieldNames>()
             .AddSingleton<SpellerState>()
+            .AddSingleton<IndexSlots>()
             .AddSingleton<IValidateOptions<AzureSearchIndexOptions>, AzureSearchIndexOptionsValidator>()
             .AddSingleton(sp => new AzureSearchIndexConfigurationSources(
                 configuration, sp.GetServices<AzureSearchIndexCodeConfiguration>()))
@@ -57,6 +61,8 @@ public static class ServiceCollectionExtensions
             .AddHostedService<AzureSearchIndexStartupCheck>()
             .AddTransient<IAzureSearchSearcher, AzureSearchSearcher>();
         
+        services.TryAddEnumerable(ServiceDescriptor.Transient<INotificationAsyncHandler<IndexRebuildCompletedNotification>, ZeroDowntimeRebuildHandler>());
+
         services.AddSingleton<ISearcher, AzureSearchSearcher>();
         services.AddSingleton<IIndexer, AzureSearchIndexer>();
 
