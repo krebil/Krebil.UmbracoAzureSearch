@@ -195,7 +195,7 @@ Suggestion fields allow only `standard.lucene` or a language analyzer (`<languag
 
 | Check | Example error |
 |---|---|
-| A culture analyzer exists in Azure | `Analyzers:Cultures:pt is "pt-BR", which Azure AI Search does not have. Use a built-in analyzer name such as "standard.lucene" or "pt-Br.microsoft".` |
+| A culture analyzer exists in Azure | `Analyzers:Cultures:pt is "pt-BR", which Azure AI Search does not have. Use a built-in analyzer name such as "standard.lucene" or "pt-Br.microsoft", or add the analyzer with ConfigureIndex.` |
 | The invariant and suggestion analyzers exist in Azure | `Analyzers:Invariant is "standard", which Azure AI Search does not have. ...` |
 | FieldPerCulture maps at least one culture | `Analyzers:Mode is FieldPerCulture, but Analyzers:Cultures maps no culture. Map at least one culture to an analyzer.` |
 | A suggestion field analyzer is allowed | `The suggestion field "suggestion_fr" uses the analyzer "keyword". Suggestion fields need "standard.lucene" or a language analyzer. Set Analyzers:SuggestionAnalyzer to "standard.lucene".` |
