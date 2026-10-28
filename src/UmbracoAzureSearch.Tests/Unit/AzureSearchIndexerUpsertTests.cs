@@ -78,6 +78,23 @@ public class AzureSearchIndexerUpsertTests
         Assert.That(service.LastFilter(), Is.EqualTo($"key eq '{id.AsKeyword()}'"));
     }
 
+    // The upload already succeeded, so a failed cleanup must not fail the index operation.
+    [Test]
+    public async Task LogsAndContinuesWhenTheLookupFails()
+    {
+        var service = new FakeSearchService
+        {
+            Respond = request => request.RequestUri!.AbsolutePath.Contains("search.post.search")
+                ? FakeSearchService.Json("""{"error":{"code":"","message":"Lookup failed"}}""", System.Net.HttpStatusCode.BadRequest)
+                : null
+        };
+
+        await IndexCulturesAsync(service, Guid.NewGuid(), "en-US");
+
+        Assert.That(service.Logs, Has.Some.Matches<(Microsoft.Extensions.Logging.LogLevel Level, string Message)>(
+            log => log.Level == Microsoft.Extensions.Logging.LogLevel.Warning && log.Message.Contains("removed variations")));
+    }
+
     private static FakeSearchService ServiceWithExistingDocuments(params string[] documentIds)
     {
         var value = string.Join(",", documentIds.Select(documentId => $$"""{"id":"{{documentId}}"}"""));
