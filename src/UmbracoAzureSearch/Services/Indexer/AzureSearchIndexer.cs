@@ -93,7 +93,9 @@ public class AzureSearchIndexer(
 
         var indexFields = await EnsureFieldsExist(physicalIndex, indexAlias, mappingResult.FieldMappings, definition);
         DropMissingSuggestionCopies(physicalIndex.Name, mappingResult.Documents, indexFields);
-        var batch = IndexDocumentsBatch.MergeOrUpload(mappingResult.Documents);
+        // Upload replaces the whole document. A merge would keep fields that the content no longer has,
+        // so a cleared value would stay searchable.
+        var batch = IndexDocumentsBatch.Upload(mappingResult.Documents);
         logger.LogDebug("Indexing {DocumentCount} document(s) for {Id} into {IndexAlias} ({IndexName})", mappingResult.Documents.Count, id, indexAlias, physicalIndex.Name);
         var result = await searchClient.IndexDocumentsAsync(batch, new IndexDocumentsOptions { ThrowOnAnyError = false });
         var failed = result.Value.Results.Where(r => !r.Succeeded).ToList();
