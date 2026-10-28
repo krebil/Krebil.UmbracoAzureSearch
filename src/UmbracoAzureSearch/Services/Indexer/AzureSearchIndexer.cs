@@ -127,7 +127,15 @@ public class AzureSearchIndexer(
         else
         {
             logger.LogDebug("Successfully indexed {DocumentCount} document(s) for {Id} into {IndexAlias}", mappingResult.Documents.Count, id, indexAlias);
-            await DeleteRemovedVariationsAsync(searchClient, indexAlias, id, mappingResult.Documents);
+            try
+            {
+                await DeleteRemovedVariationsAsync(searchClient, indexAlias, id, mappingResult.Documents);
+            }
+            catch (Exception ex) when (ex is RequestFailedException or AggregateException)
+            {
+                // The upload succeeded, so the content is indexed. The next reindex cleans up again.
+                logger.LogWarning(ex, "Failed to delete documents of removed variations for {Id} from {IndexAlias}", id, indexAlias);
+            }
         }
     }
 
