@@ -135,6 +135,49 @@ public class AzureSearchIndexerTests : AzureSearchTestBase
         await Indexer.ResetAsync(IndexAlias);
     }
 
+    [Test]
+    public async Task ReindexingRemovesFieldsTheContentNoLongerHas()
+    {
+        await IndexManager.EnsureAsync(IndexAlias);
+
+        var id = Guid.NewGuid();
+        var universe = Guid.NewGuid().AsKeyword();
+        IndexField pathIds = new(
+            Umbraco.Cms.Search.Core.Constants.FieldNames.PathIds,
+            new IndexValue { Keywords = [id.AsKeyword()] },
+            Culture: null,
+            Segment: null);
+
+        await Indexer.AddOrUpdateAsync(
+            IndexAlias,
+            id,
+            UmbracoObjectTypes.Unknown,
+            [new Variation(Culture: null, Segment: null)],
+            [pathIds, new IndexField("universe", new IndexValue { Keywords = [universe] }, Culture: null, Segment: null)],
+            null);
+
+        await WaitForIndexingOperationsToCompleteAsync();
+
+        SearchResult result = await SearchAsync(filters: [new KeywordFilter("universe", [universe], false)]);
+        Assert.That(result.Total, Is.EqualTo(1));
+
+        // The editor clears the value, so the field is no longer part of the indexed fields.
+        await Indexer.AddOrUpdateAsync(
+            IndexAlias,
+            id,
+            UmbracoObjectTypes.Unknown,
+            [new Variation(Culture: null, Segment: null)],
+            [pathIds],
+            null);
+
+        await WaitForIndexingOperationsToCompleteAsync();
+
+        result = await SearchAsync(filters: [new KeywordFilter("universe", [universe], false)]);
+        Assert.That(result.Total, Is.Zero);
+
+        await Indexer.ResetAsync(IndexAlias);
+    }
+
     private async Task<Dictionary<string, Guid>> CreateIndexStructure()
     {
         var ids = new Dictionary<string, Guid>();
