@@ -62,7 +62,7 @@ public class AzureSearchIndexer(
         {
             // The index may still hold a culture that the content no longer has.
             logger.LogDebug("Skipping {Id} for {IndexAlias}: none of its cultures is in the index", id, indexAlias);
-            await DeleteRemovedVariationsAsync(indexAlias, id, all);
+            await DeleteRemovedVariationsAsync(indexAlias, definition, id, all);
             return;
         }
 
@@ -83,26 +83,30 @@ public class AzureSearchIndexer(
         }
 
         // A culture that is no longer published has documents in its own index, which got nothing to write.
-        await DeleteRemovedVariationsAsync(indexAlias, id, all.Except(targets.Select(t => t.Key)));
+        await DeleteRemovedVariationsAsync(indexAlias, definition, id, all.Except(targets.Select(t => t.Key)));
     }
 
     // Deletes every document of the content from indexes that got nothing to write.
-    private async Task DeleteRemovedVariationsAsync(string indexAlias, Guid id, IEnumerable<PhysicalIndex> physicalIndexes)
+    private async Task DeleteRemovedVariationsAsync(string indexAlias, IndexDefinition definition, Guid id, IEnumerable<PhysicalIndex> physicalIndexes)
     {
         foreach (var physicalIndex in physicalIndexes)
         {
-            try
+            // Zero-downtime rebuild: the deletes go to the old and the new index, as the writes do.
+            foreach (var target in await serviceProvider.GetRequiredService<IndexSlots>().WriteTargetsAsync(physicalIndex.Name, definition))
             {
-                var searchClient = azureSearchClientFactory.GetSearchIndexClient().GetSearchClient(physicalIndex.Name);
-                await DeleteRemovedVariationsAsync(searchClient, indexAlias, id, []);
-            }
-            catch (RequestFailedException ex) when (ex.Status == 404)
-            {
-                // A fallback index that does not exist yet holds nothing to delete.
-            }
-            catch (Exception ex) when (ex is RequestFailedException or AggregateException)
-            {
-                logger.LogWarning(ex, "Failed to delete documents of removed variations for {Id} from {IndexAlias} ({IndexName})", id, indexAlias, physicalIndex.Name);
+                try
+                {
+                    var searchClient = azureSearchClientFactory.GetSearchIndexClient().GetSearchClient(target);
+                    await DeleteRemovedVariationsAsync(searchClient, indexAlias, id, []);
+                }
+                catch (RequestFailedException ex) when (ex.Status == 404)
+                {
+                    // A fallback index that does not exist yet holds nothing to delete.
+                }
+                catch (Exception ex) when (ex is RequestFailedException or AggregateException)
+                {
+                    logger.LogWarning(ex, "Failed to delete documents of removed variations for {Id} from {IndexAlias} ({IndexName})", id, indexAlias, target);
+                }
             }
         }
     }
