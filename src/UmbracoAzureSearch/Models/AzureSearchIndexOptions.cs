@@ -34,6 +34,12 @@ public class AzureSearchIndexOptions
     /// </summary>
     public bool ClearDocumentCacheOnRebuild { get; set; }
 
+    /// <summary>
+    /// The scoring profile a query uses when it names none. Unset: <c>umbraco-boosts</c> when a field has a boost,
+    /// otherwise the package's <c>relevanceBoost</c> profile.
+    /// </summary>
+    public string? DefaultScoringProfile { get; set; }
+
     /// <summary>Spell check settings, under <c>Indexes:&lt;alias&gt;:SpellCheck</c>. Off by default.</summary>
     public SpellCheckOptions SpellCheck { get; set; } = new();
 

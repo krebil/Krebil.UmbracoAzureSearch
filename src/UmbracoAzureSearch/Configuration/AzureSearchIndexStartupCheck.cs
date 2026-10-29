@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using Umbraco.Cms.Search.Core.Configuration;
 using UmbracoAzureSearch.Models;
 using UmbracoAzureSearch.Services.Indexer;
+using UmbracoAzureSearch.Services.Scoring;
 using UmbracoAzureSearch.Services.IndexManager;
 
 namespace UmbracoAzureSearch.Configuration;
@@ -18,6 +19,7 @@ internal sealed class AzureSearchIndexStartupCheck(
     IOptions<UmbracoAzureSearchOptions> azureSearchOptions,
     IOptionsMonitor<AzureSearchIndexOptions> azureSearchIndexOptions,
     PhysicalIndexes physicalIndexes,
+    ScoringProfileSources scoringProfileSources,
     ILogger<AzureSearchIndexStartupCheck> logger) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -39,12 +41,49 @@ internal sealed class AzureSearchIndexStartupCheck(
         if (errors.Count == 0)
         {
             await CheckIndexCountAsync(errors);
+            await CheckScoringProfilesAsync(errors, cancellationToken);
         }
 
         if (errors.Count > 0)
         {
             throw new InvalidOperationException(
                 $"The Azure AI Search index configuration is invalid:{Environment.NewLine}- {string.Join($"{Environment.NewLine}- ", errors.Distinct())}");
+        }
+    }
+
+    // Azure allows 100 scoring profiles per index.
+    private const int MaxScoringProfiles = 100;
+
+    // The profiles of every index this package serves must fit the index built from code. The providers can return
+    // profiles for an index without a configuration entry, so every registered index of this package is checked.
+    private async Task CheckScoringProfilesAsync(List<string> errors, CancellationToken cancellationToken)
+    {
+        var aliases = indexOptions.Value.GetContentIndexRegistrations()
+            .Where(r => typeof(IAzureSearchIndexer).IsAssignableFrom(r.Indexer) || typeof(AzureSearchIndexer).IsAssignableFrom(r.Indexer))
+            .Select(r => r.IndexAlias);
+        foreach (var alias in aliases)
+        {
+            var profiles = await scoringProfileSources.GetAsync(alias, cancellationToken);
+            var definition = new IndexDefinition(azureSearchIndexOptions.Get(alias)).WithProviderProfiles(profiles);
+            // ConfigureIndex is not run here, because it would see a scratch index. It can add fields and profiles, so with a
+            // callback a missing field or default profile is left to Azure.
+            var hasCallbacks = definition.Options.IndexConfigurations.Count > 0;
+            var index = IndexSchema.Build(new PhysicalIndex(alias.ToLowerInvariant(), null), alias, definition, runCallbacks: false);
+            var source = $"Scoring profiles of \"{alias}\"";
+
+            errors.AddRange(index.ScoringProfiles
+                .SelectMany(p => IndexSchema.ProfileProblems(p, index))
+                .Where(problem => !hasCallbacks || !problem.EndsWith("which the index does not have", StringComparison.Ordinal))
+                .Select(problem => $"{source}: {problem}"));
+            if (!hasCallbacks && index.ScoringProfiles.All(p => p.Name != definition.DefaultScoringProfile))
+            {
+                errors.Add($"{source}: the default scoring profile \"{definition.DefaultScoringProfile}\" is not a profile of the index.");
+            }
+
+            if (index.ScoringProfiles.Count > MaxScoringProfiles)
+            {
+                errors.Add($"{source}: the index has {index.ScoringProfiles.Count} scoring profiles, and Azure allows {MaxScoringProfiles}.");
+            }
         }
     }
 

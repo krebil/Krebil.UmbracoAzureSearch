@@ -61,9 +61,11 @@ public class AzureSearchSearcher(
         int take = 10,
         int maxSuggestions = 0,
         SearchQueryType queryType = SearchQueryType.Simple,
-        SearchMode searchMode = SearchMode.All)
+        SearchMode searchMode = SearchMode.All,
+        string? scoringProfile = null,
+        IEnumerable<string>? scoringParameters = null)
         => SearchCoreAsync(indexAlias, query, filters, facets, sorters, culture, segment,
-            accessContext, skip, take, maxSuggestions, queryType, searchMode);
+            accessContext, skip, take, maxSuggestions, queryType, searchMode, scoringProfile, scoringParameters?.ToArray());
 
     // Explicit ISearcher implementation forwards to the core method with defaults.
     Task<SearchResult> ISearcher.SearchAsync(
@@ -79,7 +81,7 @@ public class AzureSearchSearcher(
         int take,
         int maxSuggestions)
         => SearchCoreAsync(indexAlias, query, filters, facets, sorters, culture, segment,
-            accessContext, skip, take, maxSuggestions, SearchQueryType.Simple, SearchMode.All);
+            accessContext, skip, take, maxSuggestions, SearchQueryType.Simple, SearchMode.All, null, null);
 
     // Azure accepts 1 to 100 suggestions, and suggestion queries of 1 to 100 characters.
     private const int MaxSuggestSize = 100;
@@ -236,7 +238,9 @@ public class AzureSearchSearcher(
         int take,
         int maxSuggestions,
         SearchQueryType queryType,
-        SearchMode searchMode)
+        SearchMode searchMode,
+        string? scoringProfile,
+        string[]? scoringParameters)
     {
         var unknownFields = new HashSet<string>();
         while (true)
@@ -244,7 +248,7 @@ public class AzureSearchSearcher(
             try
             {
                 return await SearchOnceAsync(indexAlias, query, filters, facets, sorters, culture, segment, accessContext,
-                    skip, take, maxSuggestions, queryType, searchMode, unknownFields);
+                    skip, take, maxSuggestions, queryType, searchMode, scoringProfile, scoringParameters, unknownFields);
             }
             catch (Azure.RequestFailedException ex) when (ex.Status == 400
                 && UnknownFieldPattern.Match(ex.Message) is { Success: true } match
@@ -280,6 +284,8 @@ public class AzureSearchSearcher(
         int maxSuggestions,
         SearchQueryType queryType,
         SearchMode searchMode,
+        string? scoringProfile,
+        string[]? scoringParameters,
         ISet<string> unknownFields)
     {
         // IndexPerCulture: the index of the request culture, or the fallback index for a culture outside the map.
@@ -450,6 +456,18 @@ public class AzureSearchSearcher(
             {
                 facetSearchOptions.Filter = string.Join(" and ", facetFilterClauses);
             }
+        }
+
+        // A scoring profile for this query; without one, Azure uses the default profile of the index. The parameters
+        // feed the functions of whichever profile applies.
+        if (!string.IsNullOrWhiteSpace(scoringProfile))
+        {
+            searchOptions.ScoringProfile = scoringProfile;
+        }
+
+        foreach (var parameter in scoringParameters ?? [])
+        {
+            searchOptions.ScoringParameters.Add(parameter);
         }
 
         // The consumer's changes run last, on every Azure query of the index. The package does not validate them.

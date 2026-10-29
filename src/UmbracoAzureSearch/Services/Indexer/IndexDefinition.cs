@@ -1,3 +1,4 @@
+using Azure.Search.Documents.Indexes.Models;
 using UmbracoAzureSearch.Models;
 
 namespace UmbracoAzureSearch.Services.Indexer;
@@ -16,8 +17,27 @@ internal sealed record ResolvedField(
 /// Applies the index definition (<see cref="AzureSearchIndexOptions"/>) to fields and cultures. The indexer applies it on
 /// every path, so documents and the fields they add to the schema follow the same rules.
 /// </summary>
-internal sealed class IndexDefinition(AzureSearchIndexOptions options, string? textAnalyzer = null)
+internal sealed class IndexDefinition(
+    AzureSearchIndexOptions options,
+    string? textAnalyzer = null,
+    IReadOnlyList<ScoringProfile>? providerProfiles = null)
 {
+    /// <summary>The profile the package generates from field boosts.</summary>
+    public const string BoostsProfileName = "umbraco-boosts";
+
+    /// <summary>The scoring profiles of the scoring profile providers for this index.</summary>
+    public IReadOnlyList<ScoringProfile> ProviderProfiles { get; } = providerProfiles ?? [];
+
+    /// <summary>The definition with the profiles of the scoring profile providers.</summary>
+    public IndexDefinition WithProviderProfiles(IReadOnlyList<ScoringProfile> profiles) => new(Options, TextAnalyzer, profiles);
+
+    /// <summary>True when an opted-in field has a boost, so the index gets the umbraco-boosts profile.</summary>
+    public bool HasBoosts => Options.Fields.Values.Any(f => f.Boost is not null);
+
+    /// <summary>The scoring profile a query uses when it names none.</summary>
+    public string DefaultScoringProfile
+        => Options.DefaultScoringProfile ?? (HasBoosts ? BoostsProfileName : "relevanceBoost");
+
     // An automatic field keeps the attributes the package always gave it: searchable texts, filterable and facetable values, sortable.
     private static readonly ResolvedField Automatic = new(true, true, true, true, false, null);
 
@@ -54,7 +74,7 @@ internal sealed class IndexDefinition(AzureSearchIndexOptions options, string? t
     public string? TextAnalyzer { get; } = textAnalyzer;
 
     /// <summary>The definition for one Azure index of the alias, with its text analyzer.</summary>
-    public IndexDefinition For(string? textAnalyzer) => new(Options, textAnalyzer);
+    public IndexDefinition For(string? textAnalyzer) => new(Options, textAnalyzer, ProviderProfiles);
 
     /// <summary>True when the alias has one Azure index per culture.</summary>
     public bool IndexPerCulture => Options.Analyzers.Mode == AnalyzerMode.IndexPerCulture;

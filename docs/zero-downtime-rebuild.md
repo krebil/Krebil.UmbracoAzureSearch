@@ -49,7 +49,7 @@ When appsettings and code set the same value, code wins.
 | Step | What happens |
 |---|---|
 | Names | The index name (for example `umb-publishedcontent`) is an Azure index alias. Two Azure indexes sit behind it: `<name>-a` and `<name>-b`. Searches use the alias. |
-| Start | The rebuild creates the slot the alias does not point to, from the current definition. |
+| Start | The rebuild creates the slot the alias does not point to, from the current definition and the [scoring profile sources](scoring-profiles.md#sources-and-merge-order). Profiles added another way are not copied, and the swap log lists them as dropped. |
 | During the rebuild | Searches use the alias, so they find the old index. Every write goes to both indexes. |
 | Swap | When the rebuild completes, the package checks that it was not cancelled and that the count check passes. Then it moves the alias to the new index, waits, and deletes the old index. |
 | Failure | When the rebuild is cancelled, or the count check fails, the alias stays on the old index and the package deletes the new one. A rebuild that throws leaves the new index; the next rebuild or the next startup deletes it. |
@@ -102,7 +102,7 @@ With or without the option, the package compares each existing index with the in
 | Event | Level | Message starts with | Properties |
 |---|---|---|---|
 | Rebuild started | Information | `Rebuild started for` | `IndexAlias`, `NewIndex`, `OldIndex`, `Started` |
-| Swap done | Information | `Swap done for` | `IndexAlias`, `Name`, `OldIndex`, `NewIndex`, `OldDocumentCount`, `NewDocumentCount`, `Duration` |
+| Swap done | Information | `Swap done for` | `IndexAlias`, `Name`, `OldIndex`, `NewIndex`, `OldDocumentCount`, `NewDocumentCount`, `Duration`, `DroppedScoringProfiles` |
 | Old index deleted | Information | `Old index deleted for` | `IndexAlias`, `OldIndex` |
 | Swap skipped | Warning | `Swap skipped for` | `IndexAlias`, `Reason`, `DocumentCounts` |
 | Rebuild required | Warning | `Rebuild required for index` | `IndexAlias`, `Change` |

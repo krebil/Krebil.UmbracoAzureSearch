@@ -55,6 +55,13 @@ public sealed class AzureSearchIndexBuilder
         return this;
     }
 
+    /// <summary>The scoring profile a query uses when it names none. Same as <c>DefaultScoringProfile</c>.</summary>
+    public AzureSearchIndexBuilder DefaultScoringProfile(string profileName)
+    {
+        _options.DefaultScoringProfile = profileName;
+        return this;
+    }
+
     /// <summary>Turns on spell check per culture. Same as <c>SpellCheck</c>.</summary>
     public AzureSearchIndexBuilder SpellCheck(Action<AzureSearchSpellCheckBuilder> configure)
     {
@@ -179,7 +186,7 @@ public sealed class AzureSearchFieldBuilder
     /// </summary>
     public AzureSearchFieldBuilder PerCulture(bool value = true) => Set(() => _field.PerCulture = value);
 
-    /// <summary>The relevance boost of the field. Stored for scoring profiles; it has no effect yet.</summary>
+    /// <summary>The relevance boost of the field, in the generated umbraco-boosts scoring profile. Greater than 0.</summary>
     public AzureSearchFieldBuilder Boost(double boost) => Set(() => _field.Boost = boost);
 
     private AzureSearchFieldBuilder Set(Action set)

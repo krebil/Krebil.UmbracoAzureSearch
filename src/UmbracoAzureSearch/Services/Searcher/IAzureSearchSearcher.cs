@@ -25,7 +25,9 @@ public interface IAzureSearchSearcher : ISearcher
         int take = 10,
         int maxSuggestions = 0,
         SearchQueryType queryType = SearchQueryType.Simple,
-        SearchMode searchMode = SearchMode.All);
+        SearchMode searchMode = SearchMode.All,
+        string? scoringProfile = null,
+        IEnumerable<string>? scoringParameters = null);
 
     /// <summary>
     /// Suggests documents whose suggestion texts match a partial query, with the Azure Suggest API. Filters, culture,
