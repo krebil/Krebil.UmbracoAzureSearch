@@ -10,16 +10,19 @@ public class AzureSearchIndexManagerSuggestionTests
 {
     private const string IndexAlias = "unit-test-index";
 
-    private const string IndexWithoutSuggestions = """
-        {"name":"unit-test-index","fields":[{"name":"id","type":"Edm.String","key":true}]}
-        """;
+    // Existing indexes as the package builds them, so the startup update has nothing else to change.
+    private static readonly string IndexWithoutSuggestions = BuiltIndex(suggestions: false);
 
-    private const string IndexWithSuggestions = """
-        {"name":"unit-test-index","fields":[
-          {"name":"id","type":"Edm.String","key":true},
-          {"name":"suggestion","type":"Edm.String","searchable":true,"analyzer":"standard.lucene"}
-        ],"suggesters":[{"name":"sg","searchMode":"analyzingInfixMatching","sourceFields":["suggestion"]}]}
-        """;
+    private static readonly string IndexWithSuggestions = BuiltIndex(suggestions: true);
+
+    private static string BuiltIndex(bool suggestions)
+        => System.ClientModel.Primitives.ModelReaderWriter.Write(IndexSchema.Build(
+            new PhysicalIndex(IndexAlias, null),
+            IndexAlias,
+            new UmbracoAzureSearch.Services.Indexer.IndexDefinition(new UmbracoAzureSearch.Models.AzureSearchIndexOptions
+            {
+                Suggestions = new UmbracoAzureSearch.Models.SuggestionOptions { Enabled = suggestions },
+            }))).ToString();
 
     // Answers the index list and index definition calls as if the index has the given definition, or does not exist.
     private static FakeSearchService ServiceWithIndex(string? indexDefinition)

@@ -37,6 +37,31 @@ public sealed class AzureSearchIndexBuilder
         return this;
     }
 
+    /// <summary>
+    /// Rebuilds into a second Azure index behind an Azure alias and swaps when the rebuild succeeds.
+    /// Same as <c>ZeroDowntimeRebuild: true</c>.
+    /// </summary>
+    public AzureSearchIndexBuilder ZeroDowntimeRebuild(Action<AzureSearchRebuildBuilder>? configure = null)
+    {
+        _options.ZeroDowntimeRebuild = true;
+        configure?.Invoke(new AzureSearchRebuildBuilder(_options));
+        return this;
+    }
+
+    /// <summary>A rebuild clears the cached umbracoIndexDocument rows. Same as <c>ClearDocumentCacheOnRebuild</c>.</summary>
+    public AzureSearchIndexBuilder ClearDocumentCacheOnRebuild(bool clear = true)
+    {
+        _options.ClearDocumentCacheOnRebuild = clear;
+        return this;
+    }
+
+    /// <summary>The scoring profile a query uses when it names none. Same as <c>DefaultScoringProfile</c>.</summary>
+    public AzureSearchIndexBuilder DefaultScoringProfile(string profileName)
+    {
+        _options.DefaultScoringProfile = profileName;
+        return this;
+    }
+
     /// <summary>Turns on spell check per culture. Same as <c>SpellCheck</c>.</summary>
     public AzureSearchIndexBuilder SpellCheck(Action<AzureSearchSpellCheckBuilder> configure)
     {
@@ -161,12 +186,34 @@ public sealed class AzureSearchFieldBuilder
     /// </summary>
     public AzureSearchFieldBuilder PerCulture(bool value = true) => Set(() => _field.PerCulture = value);
 
-    /// <summary>The relevance boost of the field. Stored for scoring profiles; it has no effect yet.</summary>
+    /// <summary>The relevance boost of the field, in the generated umbraco-boosts scoring profile. Greater than 0.</summary>
     public AzureSearchFieldBuilder Boost(double boost) => Set(() => _field.Boost = boost);
 
     private AzureSearchFieldBuilder Set(Action set)
     {
         set();
+        return this;
+    }
+}
+
+/// <summary>Sets the zero-downtime rebuild of one index.</summary>
+public sealed class AzureSearchRebuildBuilder
+{
+    private readonly AzureSearchIndexOptions _options;
+
+    internal AzureSearchRebuildBuilder(AzureSearchIndexOptions options) => _options = options;
+
+    /// <summary>Skips the swap when the new index has fewer than this percentage of the old index's documents. 0 turns it off.</summary>
+    public AzureSearchRebuildBuilder MinimumDocumentPercent(int percent)
+    {
+        _options.RebuildMinimumDocumentPercent = percent;
+        return this;
+    }
+
+    /// <summary>The wait between the swap and the delete of the old index.</summary>
+    public AzureSearchRebuildBuilder DeleteDelay(TimeSpan delay)
+    {
+        _options.RebuildDeleteDelaySeconds = (int)delay.TotalSeconds;
         return this;
     }
 }

@@ -75,6 +75,8 @@ builder.Services.ConfigureAzureSearchIndex("siteSearch", index => index
     .Field("names", f => f.Searchable().Analyzer("names_folded")));
 ```
 
+`ConfigureIndex` runs after the other scoring profile sources, so a profile it adds or changes wins. See [Sources and merge order](scoring-profiles.md#sources-and-merge-order).
+
 With a `ConfigureIndex` callback, startup validation accepts analyzer names that are not built into Azure, because the callback can add them. Azure reports a wrong name when the package creates the index.
 
 ### When the package applies ConfigureIndex

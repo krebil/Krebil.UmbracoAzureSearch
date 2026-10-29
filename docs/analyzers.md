@@ -134,7 +134,7 @@ Rules:
 - Invariant documents (`culture = inv`) go to every index of the alias, including the fallback index.
 - A query goes to the index of its culture and finds the invariant documents there. A query without a culture fails with an error, because there is no index to send it to.
 - The mode is not allowed on the backoffice indexes (`Umb_Content`, `Umb_Media`, `Umb_Members`). The backoffice searches them without a culture. `Umb_PublishedContent` and custom indexes can use it.
-- All indexes of one alias rebuild together. A rebuild from the backoffice deletes and recreates every one of them.
+- All indexes of one alias rebuild together. A rebuild from the backoffice deletes and recreates every one of them. With [zero-downtime rebuild](zero-downtime-rebuild.md), each index gets its own Azure alias and a/b pair, and all of them swap together.
 - `SuggestionAnalyzer: PerCulture` gives each index a suggestion field with its culture analyzer. A fixed analyzer applies to the suggestion field of every index.
 - The document count in the backoffice is the sum over all indexes, so invariant documents count once per index.
 - The index from the `None` or `FieldPerCulture` mode is not deleted when you switch modes. Delete it in the Azure portal.
@@ -161,7 +161,7 @@ An alias with `IndexPerCulture` uses:
 indexes = mapped cultures + (1 if a fallback index exists)
 ```
 
-Zero-downtime rebuild, which a later version adds, keeps two indexes per index during a rebuild, so double the count for that.
+[Zero-downtime rebuild](zero-downtime-rebuild.md#cost-and-limits) keeps two indexes per index during a rebuild, so double the count for that.
 
 Example: `fr` and `en` mapped, and Umbraco also has `da-DK`. The alias uses 3 indexes. The other default Umbraco indexes use 1 each, so the service needs 6 indexes.
 

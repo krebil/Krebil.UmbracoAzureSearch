@@ -6,11 +6,13 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Throw;
 using Umbraco.Cms.Core.Sync;
+using Umbraco.Cms.Search.Core.Services.ContentIndexing;
 using UmbracoAzureSearch.Constants;
 using UmbracoAzureSearch.Models;
 using UmbracoAzureSearch.Services.Factory;
 using UmbracoAzureSearch.Services.IndexAliasResolver;
 using UmbracoAzureSearch.Services.Indexer;
+using UmbracoAzureSearch.Services.Scoring;
 
 namespace UmbracoAzureSearch.Services.IndexManager;
 
@@ -25,6 +27,7 @@ public class AzureSearchIndexManager(
     : UmbracoAzureServiceBase(serverRoleAccessor), IAzureSearchIndexManager
 {
     private readonly PhysicalIndexes physicalIndexes = serviceProvider.GetRequiredService<PhysicalIndexes>();
+    private readonly IndexSlots slots = serviceProvider.GetRequiredService<IndexSlots>();
 
     public async Task EnsureAsync(string indexAlias)
     {
@@ -47,26 +50,62 @@ public class AzureSearchIndexManager(
                 indexNames.Add(existingIndexName);
             }
         }
-        var definition = new IndexDefinition(azureSearchIndexOptions.Get(indexAlias));
-        foreach (var physicalIndex in await physicalIndexes.AllAsync(indexAlias, definition))
+        var definition = await DefinitionAsync(indexAlias);
+        var indexes = await physicalIndexes.AllAsync(indexAlias, definition);
+        var slotted = slots.Enabled(definition);
+        foreach (var physicalIndex in indexes)
         {
             var physicalDefinition = definition.For(physicalIndex.Analyzer);
-            if (indexNames.Contains(physicalIndex.Name))
+            var name = physicalIndex.Name;
+            var aliasTarget = slotted ? await slots.AliasTargetAsync(name) : null;
+            if (slotted)
             {
-                await UpdateExistingIndexAsync(searchIndexClient, physicalIndex, indexAlias, physicalDefinition);
+                await DeleteHalfBuiltSlotsAsync(searchIndexClient, indexAlias, name, aliasTarget, indexNames);
+            }
+
+            var live = aliasTarget ?? (indexNames.Contains(name) ? name : null);
+            if (live is not null)
+            {
+                await UpdateExistingIndexAsync(searchIndexClient, physicalIndex with { Name = live }, indexAlias, physicalDefinition);
                 continue;
             }
 
-            await searchIndexClient.CreateIndexAsync(IndexSchema.Build(physicalIndex, indexAlias, physicalDefinition));
+            // A new index. With zero-downtime rebuild it is slot a behind an alias with the name.
+            var newName = slotted ? IndexSlots.Slot(name, 'a') : name;
+            await searchIndexClient.CreateIndexAsync(IndexSchema.Build(physicalIndex with { Name = newName }, indexAlias, physicalDefinition));
+            if (slotted)
+            {
+                await searchIndexClient.CreateOrUpdateAliasAsync(new SearchAlias(name, newName));
+                slots.Forget(name);
+            }
 
-            // A fallback index added next to existing culture indexes is new because Umbraco got a language outside the map.
-            if (definition.IndexPerCulture && physicalIndex == physicalIndexes.Fallback(indexAlias)
-                && indexNames.Any(name => name.StartsWith($"{indexAliasResolver.Resolve(indexAlias)}-", StringComparison.Ordinal)))
+            // A culture index added next to existing indexes of the alias is new because of a new culture in the map, or
+            // (the fallback index) a new Umbraco language outside the map. Existing content is not in it yet.
+            if (definition.IndexPerCulture && indexes.Any(other => other != physicalIndex && indexNames.Any(n => n == other.Name || n.StartsWith($"{other.Name}-", StringComparison.Ordinal))))
             {
                 logger.LogWarning(
-                    "Rebuild required for index {IndexAlias}: Umbraco has a language outside the culture map, so the fallback index {IndexName} was created. Rebuild the index to fill it.",
-                    indexAlias, physicalIndex.Name);
+                    "Rebuild required for index {IndexAlias}: {Change}",
+                    indexAlias,
+                    physicalIndex.IsFallback
+                        ? $"Umbraco has a language outside the culture map, so the fallback index {name} was created. Rebuild the index to fill it."
+                        : $"the culture {physicalIndex.Culture} is new in the culture map, so the index {name} was created. Rebuild the index to fill it.");
             }
+        }
+    }
+
+    // A crash during a rebuild leaves the new slot behind. The live slot is the one the alias points to; without an alias
+    // the plain index is live and both slots are leftovers of a first migration.
+    private async Task DeleteHalfBuiltSlotsAsync(
+        SearchIndexClient searchIndexClient, string indexAlias, string name, string? aliasTarget, HashSet<string> indexNames)
+    {
+        foreach (var slot in new[] { IndexSlots.Slot(name, 'a'), IndexSlots.Slot(name, 'b') })
+        {
+            if (slot == aliasTarget || !indexNames.Contains(slot))
+                continue;
+
+            await searchIndexClient.DeleteIndexAsync(slot, CancellationToken.None);
+            indexNames.Remove(slot);
+            logger.LogWarning("Deleted the half-built index {NewIndex} of {IndexAlias}, left by a rebuild that did not finish", slot, indexAlias);
         }
     }
 
@@ -75,23 +114,178 @@ public class AzureSearchIndexManager(
         if (ShouldNotManipulateIndexes())
             return;
         var indexClient = azureSearchClientFactory.GetSearchIndexClient();
-        var definition = new IndexDefinition(azureSearchIndexOptions.Get(indexAlias));
+        var options = azureSearchIndexOptions.Get(indexAlias);
+        var definition = await DefinitionAsync(indexAlias);
+        await ClearDocumentCacheAsync(indexAlias, options);
+
+        // A rebuild that failed earlier left its state behind; a new rebuild replaces it.
+        slots.Take(indexAlias);
 
         // All indexes of one alias rebuild together.
-        foreach (var physicalIndex in await physicalIndexes.AllAsync(indexAlias, definition))
+        var indexes = await physicalIndexes.AllAsync(indexAlias, definition);
+        if (slots.Enabled(definition))
         {
-            try
+            var rebuilds = new List<SlotRebuild>();
+            foreach (var physicalIndex in indexes)
             {
-                await indexClient.DeleteIndexAsync(physicalIndex.Name, CancellationToken.None);
+                rebuilds.Add(await StartSlotRebuildAsync(indexClient, indexAlias, physicalIndex, definition.For(physicalIndex.Analyzer)));
             }
-            catch (RequestFailedException ex) when (ex.Status == 404)
+
+            slots.Start(indexAlias, rebuilds.ToArray());
+            return;
+        }
+
+        foreach (var physicalIndex in indexes)
+        {
+            // An index that used zero-downtime rebuild before has an alias and slots; the plain index replaces them.
+            if (await slots.AliasTargetAsync(physicalIndex.Name) is not null)
             {
-                // A fallback index that did not exist yet.
+                await DeleteQuietlyAsync(() => indexClient.DeleteAliasAsync(physicalIndex.Name));
+                await DeleteQuietlyAsync(() => indexClient.DeleteIndexAsync(IndexSlots.Slot(physicalIndex.Name, 'a'), CancellationToken.None));
+                await DeleteQuietlyAsync(() => indexClient.DeleteIndexAsync(IndexSlots.Slot(physicalIndex.Name, 'b'), CancellationToken.None));
+                slots.Forget(physicalIndex.Name);
             }
+
+            await DeleteQuietlyAsync(() => indexClient.DeleteIndexAsync(physicalIndex.Name, CancellationToken.None));
 
             // Recreate from code, not from the old definition, so a rebuild also applies schema changes such as
             // suggestions. Property fields come back as the rebuild indexes documents (see EnsureFieldsExist).
             await indexClient.CreateIndexAsync(IndexSchema.Build(physicalIndex, indexAlias, definition.For(physicalIndex.Analyzer)));
+        }
+    }
+
+    // Zero-downtime rebuild: create the inactive slot from the current definition. Searches keep using the live index
+    // until the swap (see ZeroDowntimeRebuildHandler).
+    private async Task<SlotRebuild> StartSlotRebuildAsync(
+        SearchIndexClient indexClient, string indexAlias, PhysicalIndex physicalIndex, IndexDefinition definition)
+    {
+        var name = physicalIndex.Name;
+        var aliasTarget = await slots.AliasTargetAsync(name);
+        var old = aliasTarget;
+        var oldIsPlainIndex = false;
+        if (old is null && await ExistsAsync(indexClient, name))
+        {
+            old = name;
+            oldIsPlainIndex = true;
+        }
+
+        var newName = IndexSlots.Inactive(name, aliasTarget);
+        await DeleteQuietlyAsync(() => indexClient.DeleteIndexAsync(newName, CancellationToken.None));
+        await indexClient.CreateIndexAsync(IndexSchema.Build(physicalIndex with { Name = newName }, indexAlias, definition));
+
+        var started = DateTimeOffset.UtcNow;
+        logger.LogInformation(
+            "Rebuild started for {IndexAlias}: filling {NewIndex} while searches use {OldIndex}, at {Started}",
+            indexAlias, newName, old ?? "(none)", started);
+        return new SlotRebuild(name, old, newName, oldIsPlainIndex, started);
+    }
+
+    public async Task RemoveScoringProfileAsync(string indexAlias, string profileName)
+    {
+        if (ShouldNotManipulateIndexes())
+            return;
+
+        var definition = await DefinitionAsync(indexAlias);
+        if (profileName is IndexDefinition.BoostsProfileName or IndexSchema.RelevanceProfileName)
+            throw new InvalidOperationException($"The scoring profile \"{profileName}\" belongs to the package and cannot be removed.");
+
+        if (profileName == definition.DefaultScoringProfile)
+            throw new InvalidOperationException(
+                $"The scoring profile \"{profileName}\" is the default profile of \"{indexAlias}\". Set another DefaultScoringProfile first.");
+
+        var indexClient = azureSearchClientFactory.GetSearchIndexClient();
+        foreach (var indexName in await AllIndexNamesAsync(indexAlias, definition))
+        {
+            SearchIndex index = await indexClient.GetIndexAsync(indexName);
+            if (index.DefaultScoringProfile == profileName)
+                throw new InvalidOperationException(
+                    $"The scoring profile \"{profileName}\" is the default profile of the Azure index {indexName}. Set another DefaultScoringProfile first.");
+
+            if (index.ScoringProfiles.FirstOrDefault(p => p.Name == profileName) is not { } profile)
+                continue;
+
+            index.ScoringProfiles.Remove(profile);
+            await indexClient.CreateOrUpdateIndexAsync(index);
+            logger.LogInformation("Removed the scoring profile {Profile} from index {IndexName}", profileName, indexName);
+        }
+    }
+
+    public async Task RefreshScoringProfilesAsync(string indexAlias)
+    {
+        if (ShouldNotManipulateIndexes())
+            return;
+
+        var definition = await DefinitionAsync(indexAlias);
+        var indexClient = azureSearchClientFactory.GetSearchIndexClient();
+        foreach (var physicalIndex in await physicalIndexes.AllAsync(indexAlias, definition))
+        {
+            var physicalDefinition = definition.For(physicalIndex.Analyzer);
+            foreach (var indexName in await slots.WriteTargetsAsync(physicalIndex.Name, physicalDefinition))
+            {
+                SearchIndex index = await indexClient.GetIndexAsync(indexName);
+                var desired = IndexSchema.Build(physicalIndex with { Name = indexName }, indexAlias, physicalDefinition);
+                var changed = IndexSchema.ApplyLiveChanges(index, desired, out var skipped);
+                if (skipped.Count > 0)
+                    throw new InvalidOperationException(
+                        $"The scoring profiles of \"{indexAlias}\" cannot be applied to {indexName}:{Environment.NewLine}- {string.Join($"{Environment.NewLine}- ", skipped)}");
+
+                if (changed)
+                {
+                    await indexClient.CreateOrUpdateIndexAsync(index);
+                    logger.LogInformation("Refreshed the scoring profiles of {IndexAlias} on index {IndexName}", indexAlias, indexName);
+                }
+            }
+        }
+    }
+
+    // Every Azure index behind the alias: the live index of each name, and the new slot of a rebuild in progress.
+    private async Task<string[]> AllIndexNamesAsync(string indexAlias, IndexDefinition definition)
+    {
+        var names = new List<string>();
+        foreach (var physicalIndex in await physicalIndexes.AllAsync(indexAlias, definition))
+        {
+            names.AddRange(await slots.WriteTargetsAsync(physicalIndex.Name, definition));
+        }
+
+        return names.Distinct().ToArray();
+    }
+
+    // The index definition with the profiles of the scoring profile providers, which every index build uses.
+    private async Task<IndexDefinition> DefinitionAsync(string indexAlias)
+        => new IndexDefinition(azureSearchIndexOptions.Get(indexAlias))
+            .WithProviderProfiles(await serviceProvider.GetRequiredService<ScoringProfileSources>().GetAsync(indexAlias));
+
+    private async Task ClearDocumentCacheAsync(string indexAlias, AzureSearchIndexOptions options)
+    {
+        if (!options.ClearDocumentCacheOnRebuild || serviceProvider.GetService<IIndexDocumentService>() is not { } indexDocumentService)
+            return;
+
+        await indexDocumentService.DeleteAllAsync();
+        logger.LogInformation("Cleared the cached index documents for the rebuild of {IndexAlias}", indexAlias);
+    }
+
+    private static async Task<bool> ExistsAsync(SearchIndexClient indexClient, string indexName)
+    {
+        try
+        {
+            await indexClient.GetIndexAsync(indexName);
+            return true;
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404)
+        {
+            return false;
+        }
+    }
+
+    private static async Task DeleteQuietlyAsync(Func<Task> delete)
+    {
+        try
+        {
+            await delete();
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404)
+        {
+            // Nothing to delete.
         }
     }
 
@@ -105,10 +299,24 @@ public class AzureSearchIndexManager(
         var addedSuggestions = definition.Options.Suggestions.Enabled && TryAddSuggestions(index, indexName, definition);
         var addedCopies = IndexSchema.AddMissingCopies(index, definition);
 
-        // ConfigureIndex changes that Azure applies to a live index: fields, scoring profiles, the default profile.
-        var appliedCallbacks = definition.Options.IndexConfigurations.Count > 0
-            && IndexSchema.ApplyLiveChanges(index, IndexSchema.Build(physicalIndex, indexAlias, definition));
-        if (!addedSuggestions && !addedCopies && !appliedCallbacks)
+        // Definition and ConfigureIndex changes that Azure applies to a live index: fields, scoring profiles, the default profile.
+        var desired = IndexSchema.Build(physicalIndex, indexAlias, definition);
+        var appliedChanges = IndexSchema.ApplyLiveChanges(index, desired, out var skippedProfiles);
+
+        // Changes Azure cannot apply to a live index wait for a rebuild.
+        foreach (var change in IndexSchema.RebuildRequired(index, desired, definition).Concat(skippedProfiles))
+        {
+            logger.LogWarning("Rebuild required for index {IndexAlias}: {Change}", indexAlias, $"{change} ({indexName})");
+        }
+
+        if (IndexSchema.LeftoverProfiles(index, desired) is { Length: > 0 } leftovers)
+        {
+            logger.LogInformation(
+                "Scoring profiles on {IndexName} that no source returns: {Profiles}. They stay until RemoveScoringProfileAsync removes them, and a zero-downtime rebuild drops them",
+                indexName, string.Join(", ", leftovers));
+        }
+
+        if (!addedSuggestions && !addedCopies && !appliedChanges)
             return;
 
         await searchIndexClient.CreateOrUpdateIndexAsync(index);
@@ -119,9 +327,9 @@ public class AzureSearchIndexManager(
                 addedSuggestions ? "suggestions" : "per-culture text fields", indexName);
         }
 
-        if (appliedCallbacks)
+        if (appliedChanges)
         {
-            logger.LogInformation("Applied the ConfigureIndex changes of {IndexAlias} to index {IndexName}", indexAlias, indexName);
+            logger.LogInformation("Applied the definition changes of {IndexAlias} to index {IndexName}", indexAlias, indexName);
         }
     }
 
