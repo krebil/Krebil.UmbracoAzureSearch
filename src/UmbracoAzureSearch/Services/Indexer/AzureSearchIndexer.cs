@@ -54,18 +54,21 @@ public class AzureSearchIndexer(
             return;
         }
 
+        var physicalIndexes = serviceProvider.GetRequiredService<PhysicalIndexes>();
+        var all = await physicalIndexes.AllAsync(indexAlias, definition);
+
         var variationList = variations.Where(v => definition.HoldsCulture(v.Culture)).ToArray();
         if (variationList.Length == 0)
         {
+            // The index may still hold a culture that the content no longer has.
             logger.LogDebug("Skipping {Id} for {IndexAlias}: none of its cultures is in the index", id, indexAlias);
+            await DeleteRemovedVariationsAsync(indexAlias, definition, id, all);
             return;
         }
 
         fieldList = await AddIndexerFieldsAsync(indexAlias, definition, id, objectType, variationList, fieldList);
 
         // IndexPerCulture: each culture goes to its own index, invariant documents to every index of the alias.
-        var physicalIndexes = serviceProvider.GetRequiredService<PhysicalIndexes>();
-        var all = definition.IndexPerCulture ? await physicalIndexes.AllAsync(indexAlias, definition) : [];
         var targets = variationList
             .SelectMany(variation => (variation.Culture is null && definition.IndexPerCulture
                     ? all
@@ -80,20 +83,30 @@ public class AzureSearchIndexer(
         }
 
         // A culture that is no longer published has documents in its own index, which got nothing to write.
-        foreach (var physicalIndex in all.Except(targets.Select(t => t.Key)))
+        await DeleteRemovedVariationsAsync(indexAlias, definition, id, all.Except(targets.Select(t => t.Key)));
+    }
+
+    // Deletes every document of the content from indexes that got nothing to write.
+    private async Task DeleteRemovedVariationsAsync(string indexAlias, IndexDefinition definition, Guid id, IEnumerable<PhysicalIndex> physicalIndexes)
+    {
+        foreach (var physicalIndex in physicalIndexes)
         {
-            try
+            // Zero-downtime rebuild: the deletes go to the old and the new index, as the writes do.
+            foreach (var target in await serviceProvider.GetRequiredService<IndexSlots>().WriteTargetsAsync(physicalIndex.Name, definition))
             {
-                var searchClient = azureSearchClientFactory.GetSearchIndexClient().GetSearchClient(physicalIndex.Name);
-                await DeleteRemovedVariationsAsync(searchClient, indexAlias, id, []);
-            }
-            catch (RequestFailedException ex) when (ex.Status == 404)
-            {
-                // A fallback index that does not exist yet holds nothing to delete.
-            }
-            catch (Exception ex) when (ex is RequestFailedException or AggregateException)
-            {
-                logger.LogWarning(ex, "Failed to delete documents of removed variations for {Id} from {IndexAlias} ({IndexName})", id, indexAlias, physicalIndex.Name);
+                try
+                {
+                    var searchClient = azureSearchClientFactory.GetSearchIndexClient().GetSearchClient(target);
+                    await DeleteRemovedVariationsAsync(searchClient, indexAlias, id, []);
+                }
+                catch (RequestFailedException ex) when (ex.Status == 404)
+                {
+                    // A fallback index that does not exist yet holds nothing to delete.
+                }
+                catch (Exception ex) when (ex is RequestFailedException or AggregateException)
+                {
+                    logger.LogWarning(ex, "Failed to delete documents of removed variations for {Id} from {IndexAlias} ({IndexName})", id, indexAlias, target);
+                }
             }
         }
     }

@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Umbraco.Cms.Core.Models;
 using Umbraco.Cms.Search.Core.Extensions;
 using Umbraco.Cms.Search.Core.Models.Indexing;
+using UmbracoAzureSearch.Extensions;
 using UmbracoAzureSearch.Services.Indexer;
 
 namespace UmbracoAzureSearch.Tests.Unit;
@@ -53,6 +54,24 @@ public class AzureSearchIndexerUpsertTests
             Assert.That(batches, Has.Length.EqualTo(2));
             Assert.That(Actions(batches[0]), Is.EqualTo(new[] { ("upload", $"{id.AsKeyword()}_en-us_def") }));
             Assert.That(Actions(batches[1]), Is.EqualTo(new[] { ("delete", $"{id.AsKeyword()}_da-dk_def") }));
+        });
+    }
+
+    // The content keeps a culture outside the index, so nothing is written, but the culture the index held is gone.
+    [Test]
+    public async Task DeletesTheRemovedCultureWhenNoCultureOfTheContentIsInTheIndex()
+    {
+        var id = Guid.NewGuid();
+        var service = ServiceWithExistingDocuments($"{id.AsKeyword()}_da-dk_def");
+        service.ConfigureServices = services => services.ConfigureAzureSearchIndex(IndexAlias, index => index.Cultures("da-DK"));
+
+        await IndexCulturesAsync(service, id, "en-US");
+
+        var batches = IndexBatches(service);
+        Assert.Multiple(() =>
+        {
+            Assert.That(batches, Has.Length.EqualTo(1));
+            Assert.That(Actions(batches[0]), Is.EqualTo(new[] { ("delete", $"{id.AsKeyword()}_da-dk_def") }));
         });
     }
 
