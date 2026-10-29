@@ -34,6 +34,9 @@ internal sealed class AzureSearchIndexOptionsValidator(IOptions<UmbracoAzureSear
 
     public ValidateOptionsResult Validate(string? name, AzureSearchIndexOptions options)
     {
+        // ConfigureIndex can add custom analyzers, so with a callback any name is accepted and Azure reports a wrong one
+        // at index creation. The callbacks are not run here, because they would see a scratch index.
+        Func<string, bool> isKnownAnalyzer = options.IndexConfigurations.Count == 0 ? KnownAnalyzers.Contains : _ => true;
         var failures = new List<string>();
         var definition = new IndexDefinition(options);
 
@@ -45,14 +48,14 @@ internal sealed class AzureSearchIndexOptionsValidator(IOptions<UmbracoAzureSear
                 failures.Add($"The field \"{fieldName}\" is suggestable but not searchable. Make it searchable, or remove Suggestable.");
             }
 
-            if (field.Analyzer is not null && !KnownAnalyzers.Contains(field.Analyzer))
+            if (field.Analyzer is not null && !isKnownAnalyzer(field.Analyzer))
             {
                 failures.Add($"The field \"{fieldName}\" uses the analyzer \"{field.Analyzer}\", which Azure AI Search does not have. "
-                             + "Use a built-in analyzer name such as \"standard.lucene\" or \"en.microsoft\".");
+                             + "Use a built-in analyzer name such as \"standard.lucene\" or \"en.microsoft\", or add the analyzer with ConfigureIndex.");
             }
         }
 
-        ValidateAnalyzers(options.Analyzers, definition, failures);
+        ValidateAnalyzers(options.Analyzers, definition, isKnownAnalyzer, failures);
 
         // The backoffice searches its indexes without a culture, which IndexPerCulture rejects.
         if (definition.IndexPerCulture && name is not null && BackofficeIndexes.Contains(name))
@@ -72,7 +75,7 @@ internal sealed class AzureSearchIndexOptionsValidator(IOptions<UmbracoAzureSear
         return failures.Count > 0 ? ValidateOptionsResult.Fail(failures) : ValidateOptionsResult.Success;
     }
 
-    private static void ValidateAnalyzers(AnalyzerOptions analyzers, IndexDefinition definition, List<string> failures)
+    private static void ValidateAnalyzers(AnalyzerOptions analyzers, IndexDefinition definition, Func<string, bool> isKnownAnalyzer, List<string> failures)
     {
         const string key = "Analyzers";
         foreach (var (culture, analyzer) in analyzers.Cultures)
@@ -113,10 +116,10 @@ internal sealed class AzureSearchIndexOptionsValidator(IOptions<UmbracoAzureSear
 
         void CheckKnown(string setting, string analyzer)
         {
-            if (!KnownAnalyzers.Contains(analyzer))
+            if (!isKnownAnalyzer(analyzer))
             {
                 failures.Add($"{setting} is \"{analyzer}\", which Azure AI Search does not have. "
-                             + "Use a built-in analyzer name such as \"standard.lucene\" or \"pt-Br.microsoft\".");
+                             + "Use a built-in analyzer name such as \"standard.lucene\" or \"pt-Br.microsoft\", or add the analyzer with ConfigureIndex.");
             }
         }
     }

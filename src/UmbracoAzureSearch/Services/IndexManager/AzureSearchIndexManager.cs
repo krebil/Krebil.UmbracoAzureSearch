@@ -53,11 +53,11 @@ public class AzureSearchIndexManager(
             var physicalDefinition = definition.For(physicalIndex.Analyzer);
             if (indexNames.Contains(physicalIndex.Name))
             {
-                await UpdateExistingIndexAsync(searchIndexClient, physicalIndex.Name, physicalDefinition);
+                await UpdateExistingIndexAsync(searchIndexClient, physicalIndex, indexAlias, physicalDefinition);
                 continue;
             }
 
-            await searchIndexClient.CreateIndexAsync(IndexSchema.Build(physicalIndex.Name, physicalDefinition));
+            await searchIndexClient.CreateIndexAsync(IndexSchema.Build(physicalIndex, indexAlias, physicalDefinition));
 
             // A fallback index added next to existing culture indexes is new because Umbraco got a language outside the map.
             if (definition.IndexPerCulture && physicalIndex == physicalIndexes.Fallback(indexAlias)
@@ -91,24 +91,38 @@ public class AzureSearchIndexManager(
 
             // Recreate from code, not from the old definition, so a rebuild also applies schema changes such as
             // suggestions. Property fields come back as the rebuild indexes documents (see EnsureFieldsExist).
-            await indexClient.CreateIndexAsync(IndexSchema.Build(physicalIndex.Name, definition.For(physicalIndex.Analyzer)));
+            await indexClient.CreateIndexAsync(IndexSchema.Build(physicalIndex, indexAlias, definition.For(physicalIndex.Analyzer)));
         }
     }
 
     // An existing index gets the fields its definition adds without a rebuild: suggestions on indexes created before
     // suggestions existed, and the aggregate copies of a new culture. Their documents fill on rebuild.
-    private async Task UpdateExistingIndexAsync(SearchIndexClient searchIndexClient, string indexName, IndexDefinition definition)
+    private async Task UpdateExistingIndexAsync(
+        SearchIndexClient searchIndexClient, PhysicalIndex physicalIndex, string indexAlias, IndexDefinition definition)
     {
+        var indexName = physicalIndex.Name;
         SearchIndex index = await searchIndexClient.GetIndexAsync(indexName);
         var addedSuggestions = definition.Options.Suggestions.Enabled && TryAddSuggestions(index, indexName, definition);
         var addedCopies = IndexSchema.AddMissingCopies(index, definition);
-        if (!addedSuggestions && !addedCopies)
+
+        // ConfigureIndex changes that Azure applies to a live index: fields, scoring profiles, the default profile.
+        var appliedCallbacks = definition.Options.IndexConfigurations.Count > 0
+            && IndexSchema.ApplyLiveChanges(index, IndexSchema.Build(physicalIndex, indexAlias, definition));
+        if (!addedSuggestions && !addedCopies && !appliedCallbacks)
             return;
 
         await searchIndexClient.CreateOrUpdateIndexAsync(index);
-        logger.LogWarning(
-            "Added {Fields} to index {IndexName}. Rebuild the index to fill them for existing content.",
-            addedSuggestions ? "suggestions" : "per-culture text fields", indexName);
+        if (addedSuggestions || addedCopies)
+        {
+            logger.LogWarning(
+                "Added {Fields} to index {IndexName}. Rebuild the index to fill them for existing content.",
+                addedSuggestions ? "suggestions" : "per-culture text fields", indexName);
+        }
+
+        if (appliedCallbacks)
+        {
+            logger.LogInformation("Applied the ConfigureIndex changes of {IndexAlias} to index {IndexName}", indexAlias, indexName);
+        }
     }
 
     private bool TryAddSuggestions(SearchIndex index, string indexName, IndexDefinition definition)

@@ -10,7 +10,7 @@ namespace UmbracoAzureSearch.Services.IndexManager;
 /// One Azure index behind an Umbraco index alias. <see cref="Analyzer"/> is the text analyzer of the index; null uses
 /// <c>standard.lucene</c>.
 /// </summary>
-internal sealed record PhysicalIndex(string Name, string? Analyzer);
+internal sealed record PhysicalIndex(string Name, string? Analyzer, string? Culture = null, bool IsFallback = false);
 
 /// <summary>
 /// Resolves an Umbraco index alias to its Azure indexes. Without <see cref="AnalyzerMode.IndexPerCulture"/> an alias has one
@@ -51,12 +51,12 @@ internal sealed class PhysicalIndexes(
         var key = IndexDefinition.MatchKey(definition.Options.Analyzers.Cultures.Keys, culture);
         return key is null
             ? Fallback(indexAlias)
-            : new PhysicalIndex(Name(indexAlias, key), definition.Options.Analyzers.Cultures[key]);
+            : new PhysicalIndex(Name(indexAlias, key), definition.Options.Analyzers.Cultures[key], key);
     }
 
     /// <summary>The fallback index of the alias.</summary>
     public PhysicalIndex Fallback(string indexAlias)
-        => new(Name(indexAlias, FallbackSuffix), LexicalAnalyzerName.StandardLucene.ToString());
+        => new(Name(indexAlias, FallbackSuffix), LexicalAnalyzerName.StandardLucene.ToString(), IsFallback: true);
 
     /// <summary>
     /// True when Umbraco has a language outside the culture map, so the alias needs a fallback index. Null when the
@@ -77,7 +77,7 @@ internal sealed class PhysicalIndexes(
     }
 
     private IEnumerable<PhysicalIndex> Mapped(string indexAlias, IndexDefinition definition)
-        => definition.Options.Analyzers.Cultures.Select(culture => new PhysicalIndex(Name(indexAlias, culture.Key), culture.Value));
+        => definition.Options.Analyzers.Cultures.Select(culture => new PhysicalIndex(Name(indexAlias, culture.Key), culture.Value, culture.Key));
 
     private PhysicalIndex Single(string indexAlias) => new(indexAliasResolver.Resolve(indexAlias), null);
 

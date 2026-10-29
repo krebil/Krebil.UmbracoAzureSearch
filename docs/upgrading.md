@@ -84,6 +84,8 @@ The package checks the [index configuration](index-configuration.md#validation) 
 | Change searchable, filterable, facetable, sortable or the analyzer of an existing field | Yes |
 | Change the content types or cultures of an index | Yes |
 | Add a per-index indexer | Yes, to fill existing content |
+| Add fields or scoring profiles with `ConfigureIndex` | No, applied at startup |
+| Add analyzers or change existing fields with `ConfigureIndex` | Yes |
 | Change `Analyzers:Mode`, add a culture, change an analyzer | Yes |
 | Add an Umbraco language outside the culture map of an `IndexPerCulture` index | Yes, to fill the new fallback index |
 | Change `SuggestionAnalyzer` or suggestion fields | Yes |
