@@ -90,6 +90,10 @@ public class AzureSearchIndexer(
             {
                 // A fallback index that does not exist yet holds nothing to delete.
             }
+            catch (Exception ex) when (ex is RequestFailedException or AggregateException)
+            {
+                logger.LogWarning(ex, "Failed to delete documents of removed variations for {Id} from {IndexAlias} ({IndexName})", id, indexAlias, physicalIndex.Name);
+            }
         }
     }
 

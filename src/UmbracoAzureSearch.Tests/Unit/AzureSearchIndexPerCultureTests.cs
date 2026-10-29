@@ -185,6 +185,26 @@ public class AzureSearchIndexPerCultureTests
         Assert.That(Writes(service).Keys, Is.EquivalentTo(new[] { Fr, En }));
     }
 
+    // An unpublished culture gets nothing to write, but its documents are in its own index.
+    [Test]
+    public async Task DeletesTheDocumentsOfARemovedCultureFromItsIndex()
+    {
+        var service = Service(["fr-FR", "en-US"]);
+        service.Respond = request => request.RequestUri!.AbsolutePath.Contains("search.post.search") && IndexName(request.RequestUri.AbsolutePath) == En
+            ? FakeSearchService.Json("""{"value":[{"id":"removed_en-us_def"}]}""")
+            : null;
+
+        await IndexAsync(service, new Variation("fr-FR", null));
+
+        var deletes = service.Requests
+            .Where(r => r.Path.Contains("search.index"))
+            .SelectMany(r => JsonDocument.Parse(r.Body!).RootElement.GetProperty("value").EnumerateArray()
+                .Where(d => d.GetProperty("@search.action").GetString() == "delete")
+                .Select(d => (Index: IndexName(r.Path), Id: d.GetProperty("id").GetString())))
+            .ToArray();
+        Assert.That(deletes, Is.EqualTo(new[] { (En, "removed_en-us_def") }));
+    }
+
     [Test]
     public async Task CreatesTheFallbackIndexOnTheFirstDocumentOfAnUnmappedCulture()
     {
