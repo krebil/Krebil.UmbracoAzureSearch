@@ -16,7 +16,7 @@ internal sealed record ResolvedField(
 /// Applies the index definition (<see cref="AzureSearchIndexOptions"/>) to fields and cultures. The indexer applies it on
 /// every path, so documents and the fields they add to the schema follow the same rules.
 /// </summary>
-internal sealed class IndexDefinition(AzureSearchIndexOptions options)
+internal sealed class IndexDefinition(AzureSearchIndexOptions options, string? textAnalyzer = null)
 {
     // An automatic field keeps the attributes the package always gave it: searchable texts, filterable and facetable values, sortable.
     private static readonly ResolvedField Automatic = new(true, true, true, true, false, null);
@@ -34,7 +34,7 @@ internal sealed class IndexDefinition(AzureSearchIndexOptions options)
         // System fields are part of the Umbraco Search contract: deletes, the backoffice and the Delivery API filter on them.
         var automatic = Options.AutomaticFields || IsSystemField(fieldName);
         if (field is null)
-            return automatic ? Automatic : null;
+            return automatic ? Automatic with { Analyzer = TextAnalyzer } : null;
 
         bool Attribute(bool? value, bool automaticValue) => value ?? (automatic && automaticValue);
         return new ResolvedField(
@@ -43,9 +43,21 @@ internal sealed class IndexDefinition(AzureSearchIndexOptions options)
             Attribute(field.Facetable, Automatic.Facetable),
             Attribute(field.Sortable, Automatic.Sortable),
             field.Suggestable ?? false,
-            field.Analyzer,
+            field.Analyzer ?? TextAnalyzer,
             field.PerCulture ?? false);
     }
+
+    /// <summary>
+    /// The text analyzer of the Azure index this definition writes to: the culture analyzer of an IndexPerCulture index.
+    /// Null uses <c>standard.lucene</c>. It applies to the aggregate text fields, the suggestion field and fields without an analyzer.
+    /// </summary>
+    public string? TextAnalyzer { get; } = textAnalyzer;
+
+    /// <summary>The definition for one Azure index of the alias, with its text analyzer.</summary>
+    public IndexDefinition For(string? textAnalyzer) => new(Options, textAnalyzer);
+
+    /// <summary>True when the alias has one Azure index per culture.</summary>
+    public bool IndexPerCulture => Options.Analyzers.Mode == AnalyzerMode.IndexPerCulture;
 
     /// <summary>True when the index keeps copies of its text fields per culture.</summary>
     public bool FieldPerCulture => Options.Analyzers.Mode == AnalyzerMode.FieldPerCulture;

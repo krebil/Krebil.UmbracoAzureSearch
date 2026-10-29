@@ -60,7 +60,7 @@ Content types, cultures and per-index indexers need types and logic, so only cod
 | Opted-in fields and attributes | `Fields:<field>` | `.Field("<field>", f => ...)` | None | Yes, to change an attribute of an existing field | [Index definition](index-definition.md) |
 | Content types | Code only | `.ContentTypes(params string[])` | Every content type | Yes | [Index definition](index-definition.md) |
 | Cultures | Code only | `.Cultures(params string[])` | Every culture | Yes | [Index definition](index-definition.md) |
-| Analyzer mode | `Analyzers:Mode` | `.Analyzers(a => a.FieldPerCulture())` | `None` | Yes | [Analyzers](analyzers.md) |
+| Analyzer mode | `Analyzers:Mode` | `.Analyzers(a => a.FieldPerCulture())` or `.IndexPerCulture()` | `None` | Yes | [Analyzers](analyzers.md) |
 | Culture analyzers | `Analyzers:Cultures:<culture>` | `.Analyzers(a => a.Culture("fr", ...))` | None | Yes | [Analyzers](analyzers.md) |
 | Invariant analyzer | `Analyzers:Invariant` | `.Analyzers(a => a.Invariant(...))` | `standard.lucene` | Yes | [Analyzers](analyzers.md) |
 | Suggestion analyzer | `Analyzers:SuggestionAnalyzer` | `.Analyzers(a => a.SuggestionAnalyzer(...))` | `PerCulture` | Yes | [Analyzers](analyzers.md#suggestionanalyzer) |
@@ -73,6 +73,7 @@ One setting applies to the whole service, not to one index:
 | Setting | appsettings key | Default | Docs |
 |---|---|---|---|
 | Field limit of the service | `UmbracoAzureSearch:MaxFieldsPerIndex` | `1000` | [Field budget](index-definition.md#field-budget) |
+| Index limit of the service | `UmbracoAzureSearch:MaxIndexes` | `15` | [Index count](analyzers.md#index-count) |
 
 ## Validation
 

@@ -325,6 +325,8 @@ public class AzureSearchIndexDefinitionTests
         };
 
         public IContentBase GetContent(Guid id, UmbracoObjectTypes objectType) => DispatchProxy.Create<IContentBase, DefaultProxy>();
+
+        public Task<string[]> GetLanguageIsoCodesAsync() => Task.FromResult<string[]>(["en-US"]);
     }
 
     // Answers every member with its default value; the test indexer does not read the content.

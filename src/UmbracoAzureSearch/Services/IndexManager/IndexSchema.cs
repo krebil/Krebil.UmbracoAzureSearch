@@ -1,5 +1,6 @@
 using Azure.Search.Documents.Indexes.Models;
 using UmbracoAzureSearch.Constants;
+using UmbracoAzureSearch.Models;
 using UmbracoAzureSearch.Services.Indexer;
 
 namespace UmbracoAzureSearch.Services.IndexManager;
@@ -72,10 +73,12 @@ internal static class IndexSchema
         if (!definition.Options.Suggestions.Enabled)
             yield break;
 
-        // A fixed suggestion analyzer applies to the shared field only in FieldPerCulture; otherwise it stays standard.
-        var sharedAnalyzer = definition.FieldPerCulture && !definition.SuggestionsPerCulture
+        // A fixed suggestion analyzer applies to the shared field in FieldPerCulture and IndexPerCulture. Otherwise the
+        // shared field uses the text analyzer of the index: the culture analyzer of an IndexPerCulture index, or standard.
+        var fixedAnalyzer = !string.Equals(definition.Options.Analyzers.SuggestionAnalyzer, AnalyzerOptions.PerCulture, StringComparison.OrdinalIgnoreCase);
+        var sharedAnalyzer = (definition.FieldPerCulture || definition.IndexPerCulture) && fixedAnalyzer
             ? definition.Options.Analyzers.SuggestionAnalyzer
-            : LexicalAnalyzerName.StandardLucene.ToString();
+            : definition.TextAnalyzer ?? LexicalAnalyzerName.StandardLucene.ToString();
         yield return SuggestionField(IndexConstants.FieldNames.Suggestion, sharedAnalyzer);
 
         if (!definition.SuggestionsPerCulture)
@@ -142,6 +145,9 @@ internal static class IndexSchema
         index.Suggesters.Add(new SearchSuggester(IndexConstants.SuggesterName, fields.Select(f => f.Name).ToArray()));
     }
 
+    // A null name keeps the Azure default (standard.lucene); the implicit string conversion would throw on null.
+    private static LexicalAnalyzerName? Analyzer(string? name) => name is null ? (LexicalAnalyzerName?)null : new LexicalAnalyzerName(name);
+
     private static SearchField SuggestionField(string name, string analyzer)
         => new(name, SearchFieldDataType.String)
         {
@@ -150,4 +156,81 @@ internal static class IndexSchema
             IsFacetable = false,
             AnalyzerName = analyzer,
         };
+
+    // The index definition in code; EnsureAsync, ResetAsync and the indexer create indexes from it.
+    public static SearchIndex Build(string indexName, IndexDefinition definition)
+    {
+        var newIndex = new SearchIndex(indexName, [
+            new SearchField(IndexConstants.FieldNames.Id,  SearchFieldDataType.String)
+            {
+                IsKey = true,
+                IsSortable = true
+            },
+            new SearchField(IndexConstants.FieldNames.Key, SearchFieldDataType.String)
+            {
+                IsFilterable = true,
+                IsSortable = true
+            },
+            new SearchField(IndexConstants.FieldNames.ObjectType, SearchFieldDataType.String)
+            {
+                IsFilterable = true
+            },
+            new SearchField(IndexConstants.FieldNames.Culture, SearchFieldDataType.String)
+            {
+                IsFilterable = true
+            },
+            new SearchField(IndexConstants.FieldNames.Segment, SearchFieldDataType.String)
+            {
+                IsFilterable = true
+            },
+            new SearchField(IndexConstants.FieldNames.AccessKeys, SearchFieldDataType.Collection(SearchFieldDataType.String))
+            {
+                IsFilterable = true
+            },
+            new SearchField(IndexConstants.FieldNames.AllTexts, SearchFieldDataType.Collection(SearchFieldDataType.String))
+            {
+                IsSearchable = true,
+                IsFilterable = false,
+                IsFacetable = false,
+                AnalyzerName = Analyzer(definition.TextAnalyzer)
+            },
+            new SearchField(IndexConstants.FieldNames.AllTextsR1, SearchFieldDataType.Collection(SearchFieldDataType.String))
+            {
+                IsSearchable = true,
+                IsFilterable = false,
+                IsFacetable = false,
+                AnalyzerName = Analyzer(definition.TextAnalyzer)
+            },
+            new SearchField(IndexConstants.FieldNames.AllTextsR2, SearchFieldDataType.Collection(SearchFieldDataType.String))
+            {
+                IsSearchable = true,
+                IsFilterable = false,
+                IsFacetable = false,
+                AnalyzerName = Analyzer(definition.TextAnalyzer)
+            },
+            new SearchField(IndexConstants.FieldNames.AllTextsR3, SearchFieldDataType.Collection(SearchFieldDataType.String))
+            {
+                IsSearchable = true,
+                IsFilterable = false,
+                IsFacetable = false,
+                AnalyzerName = Analyzer(definition.TextAnalyzer)
+            }
+        ]);
+
+        foreach (var copy in CopyFields(definition))
+        {
+            newIndex.Fields.Add(copy);
+        }
+
+        if (definition.Options.Suggestions.Enabled)
+        {
+            AddSuggestions(newIndex, definition);
+        }
+
+        // Scoring profile to boost text relevance fields (R1 > R2 > R3 > base), copies included
+        newIndex.ScoringProfiles.Add(RelevanceProfile(newIndex.Fields.Select(f => f.Name)));
+        newIndex.DefaultScoringProfile = RelevanceProfileName;
+
+        return newIndex;
+    }
 }

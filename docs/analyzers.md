@@ -54,6 +54,7 @@ builder.Services.ConfigureAzureSearchIndex("siteSearch", index => index
 |---|---|---|---|
 | `None` | Shared text fields with `standard.lucene` for every culture | One culture, or text where word forms do not matter | None |
 | `FieldPerCulture` | One copy of the aggregate text fields and the suggestion field per mapped culture, plus an invariant copy | Several cultures in one index | About 5 extra fields per mapped culture, and the text is stored once per copy it goes into |
+| `IndexPerCulture` | One Azure index per mapped culture, plus a fallback index for languages outside the map | Every field must use the culture analyzer, or the cultures differ a lot in size | One Azure index per mapped culture, and invariant documents are stored in every index |
 
 ## FieldPerCulture
 
@@ -94,6 +95,78 @@ A copy is named `<field>_<suffix>`. The suffix is the culture key in lowercase, 
 
 Use these names in `ConfigureIndex` and in scoring profiles.
 
+## IndexPerCulture
+
+Each mapped culture gets its own Azure index, `<alias>-<culture>`, where the alias and the culture key are in lowercase. Every text field in that index uses the culture analyzer: the aggregate text fields, the suggestion field, and every field without its own `Analyzer`. There are no per-culture copies, so `.PerCulture()` has no effect.
+
+appsettings:
+
+```json
+{
+  "UmbracoAzureSearch": {
+    "Indexes": {
+      "siteSearch": {
+        "Analyzers": {
+          "Mode": "IndexPerCulture",
+          "Cultures": { "fr": "fr.microsoft", "en": "en.microsoft" }
+        }
+      }
+    }
+  }
+}
+```
+
+Code:
+
+```csharp
+builder.Services.ConfigureAzureSearchIndex("siteSearch", index => index
+    .Analyzers(a => a
+        .IndexPerCulture()
+        .Culture("fr", LexicalAnalyzerName.FrMicrosoft)
+        .Culture("en", LexicalAnalyzerName.EnMicrosoft)));
+// Azure indexes: sitesearch-fr, sitesearch-en.
+// sitesearch-fallback only when Umbraco has a language other than fr and en.
+```
+
+Rules:
+
+- A document of a mapped culture goes to the index of that culture. Culture keys match as described in [Culture keys](#culture-keys).
+- Invariant documents (`culture = inv`) go to every index of the alias, including the fallback index.
+- A query goes to the index of its culture and finds the invariant documents there. A query without a culture fails with an error, because there is no index to send it to.
+- The mode is not allowed on the backoffice indexes (`Umb_Content`, `Umb_Media`, `Umb_Members`). The backoffice searches them without a culture. `Umb_PublishedContent` and custom indexes can use it.
+- All indexes of one alias rebuild together. A rebuild from the backoffice deletes and recreates every one of them.
+- `SuggestionAnalyzer: PerCulture` gives each index a suggestion field with its culture analyzer. A fixed analyzer applies to the suggestion field of every index.
+- The document count in the backoffice is the sum over all indexes, so invariant documents count once per index.
+- The index from the `None` or `FieldPerCulture` mode is not deleted when you switch modes. Delete it in the Azure portal.
+
+### IndexPerCulture can also create a fallback index
+
+The mode name does not say so, but the alias can have one more index: `<alias>-fallback`.
+
+| Question | Answer |
+|---|---|
+| When does it exist? | Only when Umbraco has a language outside the culture map. When every language is mapped, there is no fallback index. |
+| Which cultures go into it? | Every culture outside the map, for example `da-DK` when only `fr` and `en` are mapped. |
+| Which analyzer does it use? | `standard.lucene`. |
+| Does it hold invariant documents? | Yes. Invariant documents are copied into it, as into every index of the alias. |
+| Does it count against the tier? | Yes. It counts against the index limit of the service like any other index. |
+
+When you add an Umbraco language outside the map, the package creates the fallback index at the next startup (with `EnsureIndicesOnStartup()`), or when the first document of that language is indexed. It logs a warning that a rebuild is required. Rebuild the index to fill the fallback index with existing content.
+
+### Index count
+
+An alias with `IndexPerCulture` uses:
+
+```
+indexes = mapped cultures + (1 if a fallback index exists)
+```
+
+Zero-downtime rebuild, which a later version adds, keeps two indexes per index during a rebuild, so double the count for that.
+
+Example: `fr` and `en` mapped, and Umbraco also has `da-DK`. The alias uses 3 indexes. The other default Umbraco indexes use 1 each, so the service needs 6 indexes.
+
+The package checks the total at startup against `UmbracoAzureSearch:MaxIndexes` (default `15`, the Basic limit) when an index uses `IndexPerCulture`. Set it to your tier's limit: 3 on Free, 15 on Basic, 50 on S1, 200 on S2 and S3. When the package cannot read the Umbraco languages, it counts the fallback index.
+
 ## Culture keys
 
 A culture key matches a culture exactly first, then by its language part. Matching is case-insensitive.
@@ -126,6 +199,9 @@ Suggestion fields allow only `standard.lucene` or a language analyzer (`<languag
 | The invariant and suggestion analyzers exist in Azure | `Analyzers:Invariant is "standard", which Azure AI Search does not have. ...` |
 | FieldPerCulture maps at least one culture | `Analyzers:Mode is FieldPerCulture, but Analyzers:Cultures maps no culture. Map at least one culture to an analyzer.` |
 | A suggestion field analyzer is allowed | `The suggestion field "suggestion_fr" uses the analyzer "keyword". Suggestion fields need "standard.lucene" or a language analyzer. Set Analyzers:SuggestionAnalyzer to "standard.lucene".` |
+| `IndexPerCulture` maps at least one culture | `Analyzers:Mode is IndexPerCulture, but Analyzers:Cultures maps no culture. ...` |
+| `IndexPerCulture` is not on a backoffice index | `Analyzers:Mode IndexPerCulture is not allowed on the backoffice index "Umb_Content". Use FieldPerCulture.` |
+| The Azure indexes fit the limit (when an index uses `IndexPerCulture`) | `The Umbraco indexes need 6 Azure indexes (Umb_Content: 1, Umb_PublishedContent: 3, Umb_Media: 1, Umb_Members: 1), but the service allows 5 (UmbracoAzureSearch:MaxIndexes). Map fewer cultures, or use FieldPerCulture.` |
 | The fields fit the limit, copies included | `The index needs 56 Azure fields, but the service allows 50 (UmbracoAzureSearch:MaxFieldsPerIndex). ...` |
 
 See [Field budget](index-definition.md#field-budget) for how fields are counted.
@@ -134,5 +210,6 @@ See [Field budget](index-definition.md#field-budget) for how fields are counted.
 
 - A change of mode, culture or analyzer needs a rebuild. Azure cannot change the analyzer of an existing field, and existing documents have no text in new copies.
 - Each mapped culture adds about 5 fields: 4 aggregate copies and 1 suggestion copy. Each `.PerCulture()` field adds 4 more per mapped culture. Watch the field limit on older Basic services (100 fields).
+- Basic allows 15 indexes, and older Basic services 5. Count the indexes before you turn on `IndexPerCulture`, and set `UmbracoAzureSearch:MaxIndexes`.
 - Use Azure analyzer names, not culture names: `pt-Br.microsoft`, not `pt-BR`. See the [list of language analyzers](https://learn.microsoft.com/azure/search/index-add-language-analyzers#supported-language-analyzers).
 - A single-word query gets a `*` suffix for prefix matching. Azure does not run the language analyzer on prefix terms, so a one-word query matches the start of indexed tokens, not word forms.
