@@ -51,7 +51,7 @@ When appsettings and code set the same value, code wins.
 | Names | The index name (for example `umb-publishedcontent`) is an Azure index alias. Two Azure indexes sit behind it: `<name>-a` and `<name>-b`. Searches use the alias. |
 | Start | The rebuild creates the slot the alias does not point to, from the current definition and the [scoring profile sources](scoring-profiles.md#sources-and-merge-order). Profiles added another way are not copied, and the swap log lists them as dropped. |
 | During the rebuild | Searches use the alias, so they find the old index. Every write goes to both indexes. |
-| Swap | When the rebuild completes, the package checks that it was not cancelled and that the count check passes. Then it moves the alias to the new index, waits, and deletes the old index. |
+| Swap | When the rebuild completes, the package checks that it was not cancelled and that the count check passes. Then it moves the alias to the new index, publishes [`IndexSwappedNotification`](#swap-notification), waits, and deletes the old index. |
 | Failure | When the rebuild is cancelled, or the count check fails, the alias stays on the old index and the package deletes the new one. A rebuild that throws leaves the new index; the next rebuild or the next startup deletes it. |
 
 With [`IndexPerCulture`](analyzers.md#indexperculture), each culture index and the fallback index has its own alias and its own a/b pair, for example `sitesearch-fr` over `sitesearch-fr-a` and `sitesearch-fr-b`. All indexes of the alias rebuild and swap together, or none swaps.
@@ -69,6 +69,45 @@ Direct calls to `IIndexer` or `IAzureSearchIndexer` from your code during a rebu
 The package counts the documents of the old and the new index before the swap. When the new index has fewer than `RebuildMinimumDocumentPercent` percent of the old index's documents, it skips the swap and logs the counts. With `IndexPerCulture`, each index is checked, and one failed check stops the swap of all.
 
 Set `RebuildMinimumDocumentPercent` to `0` to turn the check off, for example before a rebuild after you deleted much content.
+
+## Swap notification
+
+After a swap, the package publishes `IndexSwappedNotification` through the Umbraco event aggregator. Searches now read the new index. Use the notification to clear caches that hold search results, for example the output cache.
+
+| Property | Value |
+|---|---|
+| `IndexAlias` | The Umbraco index alias, for example `Umb_PublishedContent` |
+| `Swaps` | The Azure aliases that moved. Each item has `AzureAlias`, `OldIndex` and `NewIndex`. |
+
+The package publishes one notification for each Umbraco index. With `IndexPerCulture`, it publishes the notification after all Azure aliases of the index moved, and `Swaps` has one item for each culture index and the fallback index. `OldIndex` is null when the alias had no index before. At the [first migration](#first-migration), `OldIndex` is the plain index that the alias replaced.
+
+The package does not publish the notification when the swap is skipped or when an alias update fails. The old index still exists when the handlers run. The package deletes it after the handlers.
+
+When a handler throws, the package logs the error and continues. The swap stays done, and the package deletes the old index.
+
+```csharp
+using Microsoft.AspNetCore.OutputCaching;
+using Umbraco.Cms.Core.Events;
+using UmbracoAzureSearch.Notifications;
+
+public sealed class EvictSearchCacheHandler(IOutputCacheStore outputCacheStore)
+    : INotificationAsyncHandler<IndexSwappedNotification>
+{
+    public async Task HandleAsync(IndexSwappedNotification notification, CancellationToken cancellationToken)
+    {
+        if (notification.IndexAlias == "siteSearch")
+        {
+            await outputCacheStore.EvictByTagAsync("search", cancellationToken);
+        }
+    }
+}
+```
+
+Register the handler in a composer:
+
+```csharp
+builder.AddNotificationAsyncHandler<IndexSwappedNotification, EvictSearchCacheHandler>();
+```
 
 ## Wait before delete
 
@@ -104,6 +143,7 @@ With or without the option, the package compares each existing index with the in
 | Rebuild started | Information | `Rebuild started for` | `IndexAlias`, `NewIndex`, `OldIndex`, `Started` |
 | Swap done | Information | `Swap done for` | `IndexAlias`, `Name`, `OldIndex`, `NewIndex`, `OldDocumentCount`, `NewDocumentCount`, `Duration`, `DroppedScoringProfiles` |
 | Old index deleted | Information | `Old index deleted for` | `IndexAlias`, `OldIndex` |
+| Swap notification handler failed | Error | `A handler of IndexSwappedNotification failed for` | `IndexAlias` |
 | Swap skipped | Warning | `Swap skipped for` | `IndexAlias`, `Reason`, `DocumentCounts` |
 | Rebuild required | Warning | `Rebuild required for index` | `IndexAlias`, `Change` |
 | Half-built index deleted | Warning | `Deleted the half-built index` | `NewIndex`, `IndexAlias` |
@@ -131,6 +171,7 @@ With `IndexPerCulture`, this happens once for each culture index and the fallbac
 ## Gotchas
 
 - Serverless ignores the option.
+- The package publishes `IndexSwappedNotification` on the server that ran the rebuild only. On a load-balanced site, clear shared caches from that server, or tell the other servers.
 - Editors may report "my change is not in search" during a rebuild. Their change shows when the rebuild ends.
 - A large content delete makes the count check fail. Lower `RebuildMinimumDocumentPercent`, or set it to `0`, for that rebuild.
 - Umbraco Search publishes `IndexRebuildCompletedNotification` also for a cancelled rebuild. Code that listens to it must check the cancellation token.
