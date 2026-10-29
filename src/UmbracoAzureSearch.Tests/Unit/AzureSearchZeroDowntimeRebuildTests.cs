@@ -123,6 +123,22 @@ public class AzureSearchZeroDowntimeRebuildTests
         });
     }
 
+    // The cleanup of a culture the content no longer has must reach the new slot too, or the document returns at the swap.
+    [Test]
+    public async Task ARebuildCleansUpRemovedCulturesInBothSlots()
+    {
+        var (service, azure) = Service(index => ZeroDowntime(index.Cultures("da-DK")));
+        azure.Indexes.Add(SlotA);
+        azure.Aliases[Name] = SlotA;
+        var services = service.CreateServices();
+
+        await services.GetRequiredService<IIndexer>().ResetAsync(IndexAlias);
+        await services.GetRequiredService<IIndexer>().AddOrUpdateAsync(IndexAlias, Guid.NewGuid(), UmbracoObjectTypes.Document,
+            [new Variation("en-US", null)], [new IndexField("title", new IndexValue { TextsR1 = ["Red boat"] }, "en-US", null)], null);
+
+        Assert.That(azure.Searches, Is.EquivalentTo(new[] { SlotA, SlotB }));
+    }
+
     [Test]
     public async Task SwapsAndDeletesTheOldSlotWhenTheRebuildSucceeds()
     {
