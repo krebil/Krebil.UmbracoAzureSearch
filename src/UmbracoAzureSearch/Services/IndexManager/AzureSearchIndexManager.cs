@@ -30,7 +30,7 @@ public class AzureSearchIndexManager(
         if (azureSearchOptions.Value.IsServerless)
         {
             // Serverless requires the paged list call; see AzureSearchClientFactory.
-            await foreach (var existingIndex in searchIndexClient.GetIndexesAsync(top: 1000))
+            await foreach (var existingIndex in searchIndexClient.GetIndexesAsync(pageSize: 1000))
             {
                 indexNames.Add(existingIndex.Name);
             }

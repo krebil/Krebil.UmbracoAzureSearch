@@ -35,7 +35,7 @@ public class AzureSearchClientFactory(
         // Serverless services reject unpaged list calls and need the preview API
         // version that supports paging. Standard tiers stay on the stable version.
         var options = _azureSearchOptions.IsServerless
-            ? new SearchClientOptions(SearchClientOptions.ServiceVersion.V2026_05_01_Preview)
+            ? new SearchClientOptions(SearchClientOptions.ServiceVersion.V2026_08_01_Preview)
             : new SearchClientOptions();
 
         if (Transport is not null)
