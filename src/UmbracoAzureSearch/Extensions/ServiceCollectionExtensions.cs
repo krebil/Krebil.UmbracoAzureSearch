@@ -60,6 +60,7 @@ public static class ServiceCollectionExtensions
             .AddSingleton(sp => new AzureSearchIndexConfigurationSources(
                 configuration, sp.GetServices<AzureSearchIndexCodeConfiguration>()))
             .AddSingleton<IConfigureOptions<AzureSearchIndexOptions>, ConfigureAzureSearchIndexOptions>()
+            .AddSingleton<IPostConfigureOptions<AzureSearchIndexOptions>, ConfigureIndexHandlerFields>()
             .AddHostedService<AzureSearchIndexStartupCheck>()
             .AddTransient<IAzureSearchSearcher, AzureSearchSearcher>();
         
