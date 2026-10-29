@@ -12,6 +12,7 @@ using UmbracoAzureSearch.Models;
 using UmbracoAzureSearch.Services.Factory;
 using UmbracoAzureSearch.Services.IndexAliasResolver;
 using UmbracoAzureSearch.Services.Indexer;
+using UmbracoAzureSearch.Services.Scoring;
 
 namespace UmbracoAzureSearch.Services.IndexManager;
 
@@ -49,7 +50,7 @@ public class AzureSearchIndexManager(
                 indexNames.Add(existingIndexName);
             }
         }
-        var definition = new IndexDefinition(azureSearchIndexOptions.Get(indexAlias));
+        var definition = await DefinitionAsync(indexAlias);
         var indexes = await physicalIndexes.AllAsync(indexAlias, definition);
         var slotted = slots.Enabled(definition);
         foreach (var physicalIndex in indexes)
@@ -114,7 +115,7 @@ public class AzureSearchIndexManager(
             return;
         var indexClient = azureSearchClientFactory.GetSearchIndexClient();
         var options = azureSearchIndexOptions.Get(indexAlias);
-        var definition = new IndexDefinition(options);
+        var definition = await DefinitionAsync(indexAlias);
         await ClearDocumentCacheAsync(indexAlias, options);
 
         // A rebuild that failed earlier left its state behind; a new rebuild replaces it.
@@ -179,6 +180,81 @@ public class AzureSearchIndexManager(
         return new SlotRebuild(name, old, newName, oldIsPlainIndex, started);
     }
 
+    public async Task RemoveScoringProfileAsync(string indexAlias, string profileName)
+    {
+        if (ShouldNotManipulateIndexes())
+            return;
+
+        var definition = await DefinitionAsync(indexAlias);
+        if (profileName is IndexDefinition.BoostsProfileName or IndexSchema.RelevanceProfileName)
+            throw new InvalidOperationException($"The scoring profile \"{profileName}\" belongs to the package and cannot be removed.");
+
+        if (profileName == definition.DefaultScoringProfile)
+            throw new InvalidOperationException(
+                $"The scoring profile \"{profileName}\" is the default profile of \"{indexAlias}\". Set another DefaultScoringProfile first.");
+
+        var indexClient = azureSearchClientFactory.GetSearchIndexClient();
+        foreach (var indexName in await AllIndexNamesAsync(indexAlias, definition))
+        {
+            SearchIndex index = await indexClient.GetIndexAsync(indexName);
+            if (index.DefaultScoringProfile == profileName)
+                throw new InvalidOperationException(
+                    $"The scoring profile \"{profileName}\" is the default profile of the Azure index {indexName}. Set another DefaultScoringProfile first.");
+
+            if (index.ScoringProfiles.FirstOrDefault(p => p.Name == profileName) is not { } profile)
+                continue;
+
+            index.ScoringProfiles.Remove(profile);
+            await indexClient.CreateOrUpdateIndexAsync(index);
+            logger.LogInformation("Removed the scoring profile {Profile} from index {IndexName}", profileName, indexName);
+        }
+    }
+
+    public async Task RefreshScoringProfilesAsync(string indexAlias)
+    {
+        if (ShouldNotManipulateIndexes())
+            return;
+
+        var definition = await DefinitionAsync(indexAlias);
+        var indexClient = azureSearchClientFactory.GetSearchIndexClient();
+        foreach (var physicalIndex in await physicalIndexes.AllAsync(indexAlias, definition))
+        {
+            var physicalDefinition = definition.For(physicalIndex.Analyzer);
+            foreach (var indexName in await slots.WriteTargetsAsync(physicalIndex.Name, physicalDefinition))
+            {
+                SearchIndex index = await indexClient.GetIndexAsync(indexName);
+                var desired = IndexSchema.Build(physicalIndex with { Name = indexName }, indexAlias, physicalDefinition);
+                var changed = IndexSchema.ApplyLiveChanges(index, desired, out var skipped);
+                if (skipped.Count > 0)
+                    throw new InvalidOperationException(
+                        $"The scoring profiles of \"{indexAlias}\" cannot be applied to {indexName}:{Environment.NewLine}- {string.Join($"{Environment.NewLine}- ", skipped)}");
+
+                if (changed)
+                {
+                    await indexClient.CreateOrUpdateIndexAsync(index);
+                    logger.LogInformation("Refreshed the scoring profiles of {IndexAlias} on index {IndexName}", indexAlias, indexName);
+                }
+            }
+        }
+    }
+
+    // Every Azure index behind the alias: the live index of each name, and the new slot of a rebuild in progress.
+    private async Task<string[]> AllIndexNamesAsync(string indexAlias, IndexDefinition definition)
+    {
+        var names = new List<string>();
+        foreach (var physicalIndex in await physicalIndexes.AllAsync(indexAlias, definition))
+        {
+            names.AddRange(await slots.WriteTargetsAsync(physicalIndex.Name, definition));
+        }
+
+        return names.Distinct().ToArray();
+    }
+
+    // The index definition with the profiles of the scoring profile providers, which every index build uses.
+    private async Task<IndexDefinition> DefinitionAsync(string indexAlias)
+        => new IndexDefinition(azureSearchIndexOptions.Get(indexAlias))
+            .WithProviderProfiles(await serviceProvider.GetRequiredService<ScoringProfileSources>().GetAsync(indexAlias));
+
     private async Task ClearDocumentCacheAsync(string indexAlias, AzureSearchIndexOptions options)
     {
         if (!options.ClearDocumentCacheOnRebuild || serviceProvider.GetService<IIndexDocumentService>() is not { } indexDocumentService)
@@ -225,12 +301,19 @@ public class AzureSearchIndexManager(
 
         // Definition and ConfigureIndex changes that Azure applies to a live index: fields, scoring profiles, the default profile.
         var desired = IndexSchema.Build(physicalIndex, indexAlias, definition);
-        var appliedChanges = IndexSchema.ApplyLiveChanges(index, desired);
+        var appliedChanges = IndexSchema.ApplyLiveChanges(index, desired, out var skippedProfiles);
 
         // Changes Azure cannot apply to a live index wait for a rebuild.
-        foreach (var change in IndexSchema.RebuildRequired(index, desired, definition))
+        foreach (var change in IndexSchema.RebuildRequired(index, desired, definition).Concat(skippedProfiles))
         {
             logger.LogWarning("Rebuild required for index {IndexAlias}: {Change}", indexAlias, $"{change} ({indexName})");
+        }
+
+        if (IndexSchema.LeftoverProfiles(index, desired) is { Length: > 0 } leftovers)
+        {
+            logger.LogInformation(
+                "Scoring profiles on {IndexName} that no source returns: {Profiles}. They stay until RemoveScoringProfileAsync removes them, and a zero-downtime rebuild drops them",
+                indexName, string.Join(", ", leftovers));
         }
 
         if (!addedSuggestions && !addedCopies && !appliedChanges)

@@ -17,6 +17,7 @@ using UmbracoAzureSearch.Models;
 using UmbracoAzureSearch.Services.Factory;
 using UmbracoAzureSearch.Services.IndexAliasResolver;
 using UmbracoAzureSearch.Services.IndexManager;
+using UmbracoAzureSearch.Services.Scoring;
 
 namespace UmbracoAzureSearch.Services.Indexer;
 
@@ -203,7 +204,8 @@ public class AzureSearchIndexer(
         {
             // The fallback index of IndexPerCulture, for the first document of a language outside the map.
             logger.LogWarning("Creating index {IndexName} for a culture outside the culture map. Rebuild the index to fill it with existing content.", indexName);
-            index = await indexClient.CreateIndexAsync(IndexSchema.Build(physicalIndex, indexAlias, definition));
+            var profiles = await serviceProvider.GetRequiredService<ScoringProfileSources>().GetAsync(indexAlias);
+            index = await indexClient.CreateIndexAsync(IndexSchema.Build(physicalIndex, indexAlias, definition.WithProviderProfiles(profiles)));
         }
         index.ThrowIfNull();
 

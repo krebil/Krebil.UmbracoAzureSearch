@@ -90,7 +90,7 @@ The Umbraco system fields (`Umb_Id`, `Umb_ParentId`, `Umb_PathIds`, `Umb_Content
 | Suggestable | `Suggestable` | `.Suggestable()` | The texts feed [suggestions](suggestions.md). Needs Searchable. |
 | Analyzer | `Analyzer` | `.Analyzer("en.microsoft")` | The Azure analyzer of the searchable text fields. Unset uses `standard.lucene`. A custom analyzer must be added with [ConfigureIndex](customizing-azure.md). |
 | PerCulture | `PerCulture` | `.PerCulture()` | The searchable text fields get a copy per mapped culture with the culture analyzer. See [Analyzers](analyzers.md#perculture-fields). |
-| Boost | `Boost` | `.Boost(3)` | The relevance boost of the field. The package stores it. A later version turns it into a scoring profile. |
+| Boost | `Boost` | `.Boost(3)` | The relevance boost of the field, in the [`umbraco-boosts`](scoring-profiles.md#umbraco-boosts) scoring profile. |
 
 Each builder method takes an optional `bool`, so `.Searchable(false)` turns an attribute off.
 
