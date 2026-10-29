@@ -1,3 +1,4 @@
+using Azure.Search.Documents.Indexes.Models;
 using Umbraco.Cms.Search.Core.Services.ContentIndexing;
 using UmbracoAzureSearch.Models;
 
@@ -30,6 +31,13 @@ public sealed class AzureSearchIndexBuilder
     public AzureSearchIndexBuilder AutomaticFields(bool enabled)
     {
         _options.AutomaticFields = enabled;
+        return this;
+    }
+
+    /// <summary>Sets the analyzers of the index. Same as <c>Analyzers</c>.</summary>
+    public AzureSearchIndexBuilder Analyzers(Action<AzureSearchAnalyzerBuilder> configure)
+    {
+        configure(new AzureSearchAnalyzerBuilder(_options.Analyzers));
         return this;
     }
 
@@ -103,10 +111,51 @@ public sealed class AzureSearchFieldBuilder
     /// <summary>The Azure analyzer of the searchable texts, e.g. <c>en.microsoft</c>.</summary>
     public AzureSearchFieldBuilder Analyzer(string analyzerName) => Set(() => _field.Analyzer = analyzerName);
 
+    /// <summary>
+    /// Gives the searchable texts one copy per mapped culture with the culture analyzer, plus an invariant copy.
+    /// Has an effect only with the <c>FieldPerCulture</c> analyzer mode.
+    /// </summary>
+    public AzureSearchFieldBuilder PerCulture(bool value = true) => Set(() => _field.PerCulture = value);
+
     /// <summary>The relevance boost of the field. Stored for scoring profiles; it has no effect yet.</summary>
     public AzureSearchFieldBuilder Boost(double boost) => Set(() => _field.Boost = boost);
 
     private AzureSearchFieldBuilder Set(Action set)
+    {
+        set();
+        return this;
+    }
+}
+
+/// <summary>Sets the analyzers of one index.</summary>
+public sealed class AzureSearchAnalyzerBuilder
+{
+    private readonly AnalyzerOptions _analyzers;
+
+    internal AzureSearchAnalyzerBuilder(AnalyzerOptions analyzers) => _analyzers = analyzers;
+
+    /// <summary>Shared text fields with <c>standard.lucene</c>, as before. Same as <c>Mode: None</c>.</summary>
+    public AzureSearchAnalyzerBuilder None() => Set(() => _analyzers.Mode = AnalyzerMode.None);
+
+    /// <summary>One copy of the text fields per mapped culture, plus an invariant copy. Same as <c>Mode: FieldPerCulture</c>.</summary>
+    public AzureSearchAnalyzerBuilder FieldPerCulture() => Set(() => _analyzers.Mode = AnalyzerMode.FieldPerCulture);
+
+    /// <summary>Maps a culture key (for example <c>fr</c> or <c>pt-BR</c>) to an analyzer. Same as <c>Cultures:&lt;key&gt;</c>.</summary>
+    public AzureSearchAnalyzerBuilder Culture(string culture, LexicalAnalyzerName analyzer)
+        => Set(() => _analyzers.Cultures[culture] = analyzer.ToString());
+
+    /// <summary>The analyzer of the invariant copy. Same as <c>Invariant</c>.</summary>
+    public AzureSearchAnalyzerBuilder Invariant(LexicalAnalyzerName analyzer) => Set(() => _analyzers.Invariant = analyzer.ToString());
+
+    /// <summary>One shared suggestion field with this analyzer, instead of copies per culture. Same as <c>SuggestionAnalyzer</c>.</summary>
+    public AzureSearchAnalyzerBuilder SuggestionAnalyzer(LexicalAnalyzerName analyzer)
+        => Set(() => _analyzers.SuggestionAnalyzer = analyzer.ToString());
+
+    /// <summary>Suggestion copies that follow the culture analyzers (the default). Same as <c>SuggestionAnalyzer: PerCulture</c>.</summary>
+    public AzureSearchAnalyzerBuilder SuggestionAnalyzerPerCulture()
+        => Set(() => _analyzers.SuggestionAnalyzer = AnalyzerOptions.PerCulture);
+
+    private AzureSearchAnalyzerBuilder Set(Action set)
     {
         set();
         return this;

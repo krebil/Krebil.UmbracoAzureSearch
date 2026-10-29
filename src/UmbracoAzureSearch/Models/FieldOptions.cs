@@ -24,6 +24,12 @@ public class FieldOptions
     /// <summary>The Azure analyzer of the searchable texts, e.g. <c>en.microsoft</c>. Unset uses <c>standard.lucene</c>.</summary>
     public string? Analyzer { get; set; }
 
+    /// <summary>
+    /// Gives the searchable texts one copy per mapped culture, with the culture analyzer, plus an invariant copy.
+    /// Has an effect only with <see cref="AnalyzerMode.FieldPerCulture"/>.
+    /// </summary>
+    public bool? PerCulture { get; set; }
+
     /// <summary>The relevance boost of the field. Stored for scoring profiles; it has no effect yet.</summary>
     public double? Boost { get; set; }
 }

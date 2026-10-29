@@ -89,6 +89,7 @@ The Umbraco system fields (`Umb_Id`, `Umb_ParentId`, `Umb_PathIds`, `Umb_Content
 | Sortable | `Sortable` | `.Sortable()` | The package writes a single-value `<field>_<type>_sort` field to sort on. |
 | Suggestable | `Suggestable` | `.Suggestable()` | The texts feed [suggestions](suggestions.md). Needs Searchable. |
 | Analyzer | `Analyzer` | `.Analyzer("en.microsoft")` | The Azure analyzer of the searchable text fields. Unset uses `standard.lucene`. |
+| PerCulture | `PerCulture` | `.PerCulture()` | The searchable text fields get a copy per mapped culture with the culture analyzer. See [Analyzers](analyzers.md#perculture-fields). |
 | Boost | `Boost` | `.Boost(3)` | The relevance boost of the field. The package stores it. A later version turns it into a scoring profile. |
 
 Each builder method takes an optional `bool`, so `.Searchable(false)` turns an attribute off.
@@ -146,20 +147,21 @@ The indexer also adds new fields to the Azure schema as documents bring them. Th
 
 Azure limits the number of fields in one index: 1000 on every tier, and 100 on Basic services created before April 3, 2024. Set `UmbracoAzureSearch:MaxFieldsPerIndex` to `100` on an older Basic service.
 
-With automatic fields off, the package counts the fields at startup and stops startup when the count is over the limit. The count is:
+The package counts the fields at startup and stops startup when the count is over the limit. The count is:
 
 | Part | Fields |
 |---|---|
 | Base fields (`id`, `key`, `objectType`, `culture`, `segment`, `accessKeys`, four `allTexts` fields) | 10 |
 | Umbraco system fields | 25 |
-| Suggestion field, when suggestions are on | 1 |
-| Each searchable field | 4 |
-| Each filterable or facetable field | 1 |
-| Each sortable field | 1 |
+| Suggestion field, when suggestions are on | 1, plus 1 per mapped culture and 1 invariant with [suggestion copies](analyzers.md#suggestionanalyzer) |
+| [Per-culture copies](analyzers.md#fieldperculture) | 4 per mapped culture and 4 invariant, plus 4 more of each per `.PerCulture()` field |
+| Each searchable field (automatic fields off) | 4 |
+| Each filterable or facetable field (automatic fields off) | 1 |
+| Each sortable field (automatic fields off) | 1 |
 
 The count is an upper limit for a field with one value type. A searchable and filterable text field counts 5 and uses 4.
 
-With automatic fields on, the fields depend on the content, so the package does not count them. Azure rejects a new field over the limit when a document brings it.
+With automatic fields on, the other fields depend on the content, so the package counts only the fields in the table that do not depend on it. Azure rejects a new field over the limit when a document brings it.
 
 ## Validation
 
