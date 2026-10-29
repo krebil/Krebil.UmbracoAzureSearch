@@ -50,10 +50,11 @@ public class AzureSearchSearcherHardeningTests
         var filters = bodies.Select(body => body.TryGetProperty("filter", out var filter) ? filter.GetString() : null).ToArray();
         Assert.That(bodies, Has.Length.EqualTo(2));
         Assert.That(filters, Has.All.Contain("accessKeys/any("));
-        // The second request is the facet count one: no filter on the faceted field, facets requested.
-        Assert.That(filters[0], Does.Contain("genre_keywords"));
-        Assert.That(filters[1], Does.Not.Contain("genre_keywords"));
-        Assert.That(bodies[1].TryGetProperty("facets", out _), Is.True);
+        // The two requests run at the same time, so their order varies. The facet count request has no filter on the
+        // faceted field and requests facets.
+        Assert.That(filters, Has.One.Contain("genre_keywords"));
+        var facetCount = bodies.Single(body => body.TryGetProperty("filter", out var filter) && !filter.GetString()!.Contains("genre_keywords"));
+        Assert.That(facetCount.TryGetProperty("facets", out _), Is.True);
     }
 
     [Test]
