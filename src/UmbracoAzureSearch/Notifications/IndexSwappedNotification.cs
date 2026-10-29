@@ -4,12 +4,12 @@ namespace UmbracoAzureSearch.Notifications;
 
 /// <summary>
 /// Published once per Umbraco index after a zero-downtime rebuild moved all its Azure aliases to the new indexes. Searches
-/// now read the new indexes, so this is the place to clear caches of search results. Not published when the swap is
-/// skipped or fails. The old indexes still exist when the handlers run; the package deletes them after the handlers.
-/// An exception from a handler is logged and does not stop the swap or the delete.
+/// now read the new indexes. Use the notification to clear caches of search results. Not published when the swap is
+/// skipped or fails. The package deletes the old indexes after the handlers ran. The package logs an exception from a
+/// handler, and the swap and the delete continue.
 /// </summary>
 /// <param name="IndexAlias">The Umbraco index alias, for example <c>Umb_PublishedContent</c>.</param>
-/// <param name="Swaps">The Azure aliases that moved: one, or one per culture index with <c>IndexPerCulture</c>.</param>
+/// <param name="Swaps">The Azure aliases that moved. With <c>IndexPerCulture</c>, one per culture index and the fallback index.</param>
 public sealed record IndexSwappedNotification(string IndexAlias, IReadOnlyList<AzureIndexSwap> Swaps) : INotification;
 
 /// <summary>One Azure alias that a zero-downtime rebuild moved.</summary>
