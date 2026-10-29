@@ -418,7 +418,7 @@ public class AzureSearchIndexDefinitionTests
     }
 
     [Test]
-    public void ResolveFieldWithAutomaticFieldsOff()
+    public void ResolveFieldWithAutomaticFieldsOffKeepsSystemHandlerAndOptedInFieldsOnly()
     {
         var service = Service(index => index
             .AutomaticFields(false)

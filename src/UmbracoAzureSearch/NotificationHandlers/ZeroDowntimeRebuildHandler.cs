@@ -82,7 +82,8 @@ internal sealed class ZeroDowntimeRebuildHandler(
                 dropped.Length == 0 ? "none" : string.Join(", ", dropped));
         }
 
-        await PublishSwappedAsync(indexAlias, counts.Select(c => new AzureIndexSwap(c.Rebuild.Name, c.Rebuild.Old, c.Rebuild.New)).ToArray(), cancellationToken);
+        var swaps = rebuilds.Select(r => new AzureIndexSwap(r.Name, r.Old, r.New)).ToArray();
+        await PublishSwappedAsync(indexAlias, swaps);
 
         var oldIndexes = rebuilds.Where(r => r is { Old: not null, OldIsPlainIndex: false }).Select(r => r.Old!).ToArray();
         if (oldIndexes.Length == 0)
@@ -104,11 +105,12 @@ internal sealed class ZeroDowntimeRebuildHandler(
     }
 
     // The swap is done, so a failing handler must not stop the delete of the old indexes.
-    private async Task PublishSwappedAsync(string indexAlias, AzureIndexSwap[] swaps, CancellationToken cancellationToken)
+    // The swap is committed, so the handlers get no cancellation, as the alias update.
+    private async Task PublishSwappedAsync(string indexAlias, AzureIndexSwap[] swaps)
     {
         try
         {
-            await eventAggregator.PublishAsync(new IndexSwappedNotification(indexAlias, swaps), cancellationToken);
+            await eventAggregator.PublishAsync(new IndexSwappedNotification(indexAlias, swaps), CancellationToken.None);
         }
         catch (Exception exception)
         {

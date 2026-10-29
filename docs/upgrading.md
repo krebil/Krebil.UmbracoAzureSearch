@@ -104,6 +104,8 @@ With `EnsureIndicesOnStartup()`, the package logs a "Rebuild required" warning a
 
 Turning on `ZeroDowntimeRebuild` takes effect at the next rebuild. The first rebuild replaces the plain index with an alias, with a short gap in searches. See [First migration](zero-downtime-rebuild.md#first-migration).
 
+After a swap, the package publishes `IndexSwappedNotification`. Use it to clear caches of search results. See [Swap notification](zero-downtime-rebuild.md#swap-notification).
+
 ## Upgrade order
 
 None yet.

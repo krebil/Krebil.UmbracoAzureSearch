@@ -79,9 +79,11 @@ After a swap, the package publishes `IndexSwappedNotification` through the Umbra
 | `IndexAlias` | The Umbraco index alias, for example `Umb_PublishedContent` |
 | `Swaps` | The Azure aliases that moved. Each item has `AzureAlias`, `OldIndex` and `NewIndex`. |
 
-The package publishes one notification for each Umbraco index. With `IndexPerCulture`, it publishes the notification after all Azure aliases of the index moved, and `Swaps` has one item for each culture index and the fallback index. `OldIndex` is null when the alias had no index before. At the [first migration](#first-migration), `OldIndex` is the plain index that the alias replaced.
+The package publishes one notification for each Umbraco index. With `IndexPerCulture`, it publishes the notification after all Azure aliases of the index moved, and `Swaps` has one item for each culture index and the fallback index. `OldIndex` is null when the alias had no index before. At the [first migration](#first-migration), `OldIndex` is the plain index that the alias replaced. The package deleted that index before the handlers run.
 
-The package does not publish the notification when the swap is skipped or when an alias update fails. The old index still exists when the handlers run. The package deletes it after the handlers.
+After a later swap, the old index still exists when the handlers run. The package deletes it after the handlers.
+
+The package does not publish the notification when the swap is skipped or when an alias update fails. With `IndexPerCulture`, an alias update can fail after other aliases of the index moved. Searches on the moved aliases then read the new indexes, but the package publishes no notification. Run the rebuild again.
 
 When a handler throws, the package logs the error and continues. The swap stays done, and the package deletes the old index.
 
