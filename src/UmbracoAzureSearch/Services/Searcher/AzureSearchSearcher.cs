@@ -19,6 +19,8 @@ using UmbracoAzureSearch.Constants;
 using UmbracoAzureSearch.Extensions;
 using UmbracoAzureSearch.Models;
 using UmbracoAzureSearch.Services.Factory;
+using UmbracoAzureSearch.Services.IndexManager;
+using UmbracoAzureSearch.Services.Indexer;
 using UmbracoFacetResult = Umbraco.Cms.Search.Core.Models.Searching.Faceting.FacetResult;
 using AzureFacetResult = Azure.Search.Documents.Models.FacetResult;
 
@@ -154,6 +156,14 @@ public class AzureSearchSearcher(
             ? "*"
             : query.Contains(' ') ? query : $"{query}*";
 
+        // FieldPerCulture: search the copies of the request culture plus the invariant copies, analyzed per culture.
+        var definition = new IndexDefinition(azureSearchIndexOptions.Get(indexAlias));
+        var searchFields = SearchFields(definition, culture);
+        foreach (var field in searchFields)
+        {
+            searchOptions.SearchFields.Add(field);
+        }
+
         // Build base filter clauses (culture/segment)
         // Escaped like every other value: an unescaped quote could end the clause and turn the whole filter, the
         // access clause included, into something that matches everything.
@@ -285,6 +295,10 @@ public class AzureSearchSearcher(
                 IncludeTotalCount = false,
                 SearchMode = SearchMode.All
             };
+            foreach (var field in searchFields)
+            {
+                facetSearchOptions.SearchFields.Add(field);
+            }
 
             foreach (var expr in sameFieldFacetExpressions)
             {
@@ -303,7 +317,7 @@ public class AzureSearchSearcher(
             ? Task.FromResult<Response<SearchResults<SearchDocument>>?>(null)
             : SearchOrNullAsync(searchClient, searchText, facetSearchOptions);
         var suggestionsTask = GetSuggestionsAsync(
-            searchClient, indexAlias, query, maxSuggestions, suggestionFilterClauses, azureSearchIndexOptions.Get(indexAlias).Suggestions);
+            searchClient, indexAlias, query, maxSuggestions, suggestionFilterClauses, definition, culture);
         await Task.WhenAll(mainSearchTask, facetSearchTask, suggestionsTask);
 
         var result = await mainSearchTask;
@@ -359,8 +373,10 @@ public class AzureSearchSearcher(
         string? query,
         int maxSuggestions,
         List<string> filterClauses,
-        SuggestionOptions suggestionOptions)
+        IndexDefinition definition,
+        string? culture)
     {
+        var suggestionOptions = definition.Options.Suggestions;
         // The raw query, not the "*"-suffixed search text: Autocomplete completes the last term itself.
         var suggestionQuery = WhitespacePattern.Replace(query ?? string.Empty, " ").Trim();
         if (maxSuggestions <= 0 || suggestionQuery.Length == 0 || !suggestionOptions.Enabled)
@@ -372,6 +388,13 @@ public class AzureSearchSearcher(
             Size = Math.Min(maxSuggestions, MaxAutocompleteSize),
             Filter = string.Join(" and ", filterClauses)
         };
+
+        // With suggestion copies, a mapped culture completes from its copy plus the invariant copy.
+        if (definition.SuggestionsPerCulture && definition.CultureSuffix(culture) is { } suffix)
+        {
+            options.SearchFields.Add(IndexDefinition.CopyName(IndexConstants.FieldNames.Suggestion, suffix));
+            options.SearchFields.Add(IndexDefinition.CopyName(IndexConstants.FieldNames.Suggestion, IndexDefinition.InvariantSuffix));
+        }
         Response<AutocompleteResults> response;
         try
         {
@@ -406,6 +429,23 @@ public class AzureSearchSearcher(
             .Take(maxSuggestions)
             .ToArray();
         return suggestions.Length > 0 ? suggestions : null;
+    }
+
+    // Empty (every searchable field, as before) outside FieldPerCulture. In FieldPerCulture, a mapped culture searches
+    // its copies plus the invariant copies, and any other request searches the shared aggregate text fields.
+    private static string[] SearchFields(IndexDefinition definition, string? culture)
+    {
+        if (!definition.FieldPerCulture)
+            return [];
+
+        if (definition.CultureSuffix(culture) is { } suffix)
+        {
+            return IndexSchema.CopyNames(definition, suffix)
+                .Concat(IndexSchema.CopyNames(definition, IndexDefinition.InvariantSuffix))
+                .ToArray();
+        }
+
+        return IndexSchema.Aggregates.Select(a => a.Name).ToArray();
     }
 
     private static bool IsMissingSuggester(RequestFailedException ex)
