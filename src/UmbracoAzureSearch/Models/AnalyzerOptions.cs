@@ -8,6 +8,12 @@ public enum AnalyzerMode
 
     /// <summary>One copy of the aggregate text fields and the suggestion field per mapped culture, plus an invariant copy.</summary>
     FieldPerCulture,
+
+    /// <summary>
+    /// One physical index per mapped culture, plus a fallback index with <c>standard.lucene</c> when Umbraco has a
+    /// language outside the map. Invariant documents go into every index.
+    /// </summary>
+    IndexPerCulture,
 }
 
 /// <summary>

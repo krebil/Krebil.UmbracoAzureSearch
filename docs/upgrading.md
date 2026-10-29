@@ -70,7 +70,8 @@ The package checks the [index configuration](index-configuration.md#validation) 
 - A field that is suggestable but not searchable.
 - A field with an analyzer that Azure does not have.
 - An index whose fields exceed `UmbracoAzureSearch:MaxFieldsPerIndex`.
-- An unknown analyzer name in `Analyzers`, an analyzer that suggestion fields do not allow, and `FieldPerCulture` without a mapped culture.
+- An unknown analyzer name in `Analyzers`, an analyzer that suggestion fields do not allow, and `FieldPerCulture` or `IndexPerCulture` without a mapped culture.
+- `IndexPerCulture` on a backoffice index, and more Azure indexes than `UmbracoAzureSearch:MaxIndexes` when an index uses `IndexPerCulture`.
 
 ## What needs a rebuild
 
@@ -84,6 +85,7 @@ The package checks the [index configuration](index-configuration.md#validation) 
 | Change the content types or cultures of an index | Yes |
 | Add a per-index indexer | Yes, to fill existing content |
 | Change `Analyzers:Mode`, add a culture, change an analyzer | Yes |
+| Add an Umbraco language outside the culture map of an `IndexPerCulture` index | Yes, to fill the new fallback index |
 | Change `SuggestionAnalyzer` or suggestion fields | Yes |
 
 ## Upgrade order

@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using Azure;
 using Azure.Search.Documents;
 using Azure.Search.Documents.Models;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Umbraco.Cms.Core;
@@ -30,7 +31,8 @@ public class AzureSearchSearcher(
     IServerRoleAccessor serverRoleAccessor,
     IAzureSearchClientFactory azureSearchClientFactory,
     IOptionsMonitor<AzureSearchIndexOptions> azureSearchIndexOptions,
-    ILogger<AzureSearchSearcher> logger)
+    ILogger<AzureSearchSearcher> logger,
+    IServiceProvider serviceProvider)
     : UmbracoAzureServiceBase(serverRoleAccessor), IAzureSearchSearcher
 {
     private const int MaxOrderByClauses = 32;
@@ -134,7 +136,16 @@ public class AzureSearchSearcher(
         SearchMode searchMode,
         ISet<string> unknownFields)
     {
-        var searchClient = azureSearchClientFactory.GetSearchClient(indexAlias);
+        // IndexPerCulture: the index of the request culture, or the fallback index for a culture outside the map.
+        var definition = new IndexDefinition(azureSearchIndexOptions.Get(indexAlias));
+        if (definition.IndexPerCulture && string.IsNullOrWhiteSpace(culture))
+        {
+            throw new InvalidOperationException(
+                $"The index \"{indexAlias}\" has one Azure index per culture (Analyzers:Mode IndexPerCulture), so a search needs a culture.");
+        }
+
+        var physicalIndex = serviceProvider.GetRequiredService<PhysicalIndexes>().ForCulture(indexAlias, definition, culture ?? string.Empty);
+        var searchClient = azureSearchClientFactory.GetSearchIndexClient().GetSearchClient(physicalIndex.Name);
 
         var searchOptions = new SearchOptions
         {
@@ -157,7 +168,6 @@ public class AzureSearchSearcher(
             : query.Contains(' ') ? query : $"{query}*";
 
         // FieldPerCulture: search the copies of the request culture plus the invariant copies, analyzed per culture.
-        var definition = new IndexDefinition(azureSearchIndexOptions.Get(indexAlias));
         var searchFields = SearchFields(definition, culture);
         foreach (var field in searchFields)
         {

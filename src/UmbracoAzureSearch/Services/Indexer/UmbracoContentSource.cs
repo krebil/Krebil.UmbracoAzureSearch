@@ -14,6 +14,9 @@ internal interface IUmbracoContentSource
 
     /// <summary>The content item, media item or member.</summary>
     IContentBase? GetContent(Guid id, UmbracoObjectTypes objectType);
+
+    /// <summary>The ISO codes of the Umbraco languages.</summary>
+    Task<string[]> GetLanguageIsoCodesAsync();
 }
 
 // The Umbraco services are resolved on first use, so hosts without them (tests) only need them when the definition does.
@@ -34,4 +37,7 @@ internal sealed class UmbracoContentSource(IServiceProvider serviceProvider) : I
         UmbracoObjectTypes.Member => serviceProvider.GetRequiredService<IMemberService>().GetById(id),
         _ => null,
     };
+
+    public async Task<string[]> GetLanguageIsoCodesAsync()
+        => (await serviceProvider.GetRequiredService<ILanguageService>().GetAllAsync()).Select(l => l.IsoCode).ToArray();
 }
