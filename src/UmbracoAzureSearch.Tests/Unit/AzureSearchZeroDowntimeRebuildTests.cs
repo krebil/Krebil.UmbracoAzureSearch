@@ -109,6 +109,8 @@ public class AzureSearchZeroDowntimeRebuildTests
 
         await services.GetRequiredService<IIndexer>().ResetAsync(IndexAlias);
         await WriteAsync(services);
+        // The write looks up removed variations in both slots; only the search below is checked.
+        azure.Searches.Clear();
         await services.GetRequiredService<IAzureSearchSearcher>().SearchAsync(IndexAlias, query: "red");
 
         Assert.Multiple(() =>
