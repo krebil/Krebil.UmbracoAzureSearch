@@ -10,6 +10,7 @@ using Throw;
 using Umbraco.Cms.Core.Models;
 using Umbraco.Cms.Core.Sync;
 using Umbraco.Cms.Search.Core.Configuration;
+using Umbraco.Cms.Search.Core.Extensions;
 using Umbraco.Cms.Search.Core.Models.Indexing;
 using Umbraco.Cms.Search.Core.Services.ContentIndexing;
 using UmbracoAzureSearch.Constants;
@@ -69,11 +70,30 @@ public class AzureSearchIndexer(
                     ? all
                     : [physicalIndexes.ForCulture(indexAlias, definition, variation.Culture ?? string.Empty)])
                 .Select(physicalIndex => (PhysicalIndex: physicalIndex, Variation: variation)))
-            .GroupBy(t => t.PhysicalIndex, t => t.Variation);
+            .GroupBy(t => t.PhysicalIndex, t => t.Variation)
+            .ToArray();
 
         foreach (var target in targets)
         {
             await WriteAsync(indexAlias, target.Key, definition.For(target.Key.Analyzer), id, objectType, target.ToArray(), fieldList, protection);
+        }
+
+        // A culture that is no longer published has documents in its own index, which got nothing to write.
+        foreach (var physicalIndex in all.Except(targets.Select(t => t.Key)))
+        {
+            try
+            {
+                var searchClient = azureSearchClientFactory.GetSearchIndexClient().GetSearchClient(physicalIndex.Name);
+                await DeleteRemovedVariationsAsync(searchClient, indexAlias, id, []);
+            }
+            catch (RequestFailedException ex) when (ex.Status == 404)
+            {
+                // A fallback index that does not exist yet holds nothing to delete.
+            }
+            catch (Exception ex) when (ex is RequestFailedException or AggregateException)
+            {
+                logger.LogWarning(ex, "Failed to delete documents of removed variations for {Id} from {IndexAlias} ({IndexName})", id, indexAlias, physicalIndex.Name);
+            }
         }
     }
 
@@ -93,7 +113,9 @@ public class AzureSearchIndexer(
 
         var indexFields = await EnsureFieldsExist(physicalIndex, indexAlias, mappingResult.FieldMappings, definition);
         DropMissingSuggestionCopies(physicalIndex.Name, mappingResult.Documents, indexFields);
-        var batch = IndexDocumentsBatch.MergeOrUpload(mappingResult.Documents);
+        // Upload replaces the whole document. A merge would keep fields that the content no longer has,
+        // so a cleared value would stay searchable.
+        var batch = IndexDocumentsBatch.Upload(mappingResult.Documents);
         logger.LogDebug("Indexing {DocumentCount} document(s) for {Id} into {IndexAlias} ({IndexName})", mappingResult.Documents.Count, id, indexAlias, physicalIndex.Name);
         var result = await searchClient.IndexDocumentsAsync(batch, new IndexDocumentsOptions { ThrowOnAnyError = false });
         var failed = result.Value.Results.Where(r => !r.Succeeded).ToList();
@@ -109,6 +131,55 @@ public class AzureSearchIndexer(
         else
         {
             logger.LogDebug("Successfully indexed {DocumentCount} document(s) for {Id} into {IndexAlias}", mappingResult.Documents.Count, id, indexAlias);
+            try
+            {
+                await DeleteRemovedVariationsAsync(searchClient, indexAlias, id, mappingResult.Documents);
+            }
+            catch (Exception ex) when (ex is RequestFailedException or AggregateException)
+            {
+                // The upload succeeded, so the content is indexed. The next reindex cleans up again.
+                logger.LogWarning(ex, "Failed to delete documents of removed variations for {Id} from {IndexAlias}", id, indexAlias);
+            }
+        }
+    }
+
+    // Each variation is a document of its own, and every call holds all variations of the content.
+    // A document for this content that was not just written belongs to a variation that no longer
+    // exists, for example an unpublished culture. It is deleted after the upload, so the content is
+    // never missing from search results.
+    private async Task DeleteRemovedVariationsAsync(SearchClient searchClient, string indexAlias, Guid id, IEnumerable<SearchDocument> documents)
+    {
+        var writtenIds = documents.Select(d => d[IndexConstants.FieldNames.Id].ToString()).ToHashSet();
+
+        var searchOptions = new SearchOptions
+        {
+            Filter = $"{IndexConstants.FieldNames.Key} eq '{id.AsKeyword()}'",
+            Size = 1000,
+            Select = { IndexConstants.FieldNames.Id }
+        };
+        var searchResult = await searchClient.SearchAsync<SearchDocument>("*", searchOptions);
+
+        var removedIds = new List<string>();
+        await foreach (var result in searchResult.Value.GetResultsAsync())
+        {
+            if (result.Document.TryGetValue(IndexConstants.FieldNames.Id, out var documentId)
+                && documentId?.ToString() is { } value
+                && writtenIds.Contains(value) is false)
+            {
+                removedIds.Add(value);
+            }
+        }
+
+        if (removedIds.Count == 0)
+            return;
+
+        logger.LogDebug("Deleting {DocumentCount} document(s) of removed variations for {Id} from {IndexAlias}", removedIds.Count, id, indexAlias);
+        var deleteResult = await searchClient.DeleteDocumentsAsync(IndexConstants.FieldNames.Id, removedIds, new IndexDocumentsOptions { ThrowOnAnyError = false });
+        foreach (var failure in deleteResult.Value.Results.Where(r => !r.Succeeded))
+        {
+            logger.LogError(
+                "Failed to delete document {DocumentKey} of a removed variation for content {Id} from {IndexAlias}: [{StatusCode}] {ErrorMessage}",
+                failure.Key, id, indexAlias, failure.Status, failure.ErrorMessage);
         }
     }
 
