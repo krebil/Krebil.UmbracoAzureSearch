@@ -6,6 +6,7 @@ using Microsoft.Extensions.Options;
 using Umbraco.Cms.Core.Events;
 using Umbraco.Cms.Search.Core.Notifications;
 using UmbracoAzureSearch.Models;
+using UmbracoAzureSearch.Notifications;
 using UmbracoAzureSearch.Services.Factory;
 using UmbracoAzureSearch.Services.IndexManager;
 
@@ -20,6 +21,7 @@ internal sealed class ZeroDowntimeRebuildHandler(
     IndexSlots slots,
     IAzureSearchClientFactory azureSearchClientFactory,
     IOptionsMonitor<AzureSearchIndexOptions> azureSearchIndexOptions,
+    IEventAggregator eventAggregator,
     ILogger<ZeroDowntimeRebuildHandler> logger)
     : INotificationAsyncHandler<IndexRebuildCompletedNotification>
 {
@@ -80,6 +82,8 @@ internal sealed class ZeroDowntimeRebuildHandler(
                 dropped.Length == 0 ? "none" : string.Join(", ", dropped));
         }
 
+        await PublishSwappedAsync(indexAlias, counts.Select(c => new AzureIndexSwap(c.Rebuild.Name, c.Rebuild.Old, c.Rebuild.New)).ToArray(), cancellationToken);
+
         var oldIndexes = rebuilds.Where(r => r is { Old: not null, OldIsPlainIndex: false }).Select(r => r.Old!).ToArray();
         if (oldIndexes.Length == 0)
             return;
@@ -97,6 +101,19 @@ internal sealed class ZeroDowntimeRebuildHandler(
             await Task.Delay(delay);
             await DeleteOldAsync(indexAlias, oldIndexes);
         });
+    }
+
+    // The swap is done, so a failing handler must not stop the delete of the old indexes.
+    private async Task PublishSwappedAsync(string indexAlias, AzureIndexSwap[] swaps, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await eventAggregator.PublishAsync(new IndexSwappedNotification(indexAlias, swaps), cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "A handler of IndexSwappedNotification failed for {IndexAlias}. The swap is done", indexAlias);
+        }
     }
 
     private async Task DeleteOldAsync(string indexAlias, string[] oldIndexes)

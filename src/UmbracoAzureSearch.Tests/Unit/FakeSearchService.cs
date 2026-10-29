@@ -5,6 +5,8 @@ using Azure.Core.Pipeline;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Umbraco.Cms.Core.Events;
+using Umbraco.Cms.Core.Notifications;
 using Umbraco.Cms.Core.Sync;
 using UmbracoAzureSearch.Extensions;
 using UmbracoAzureSearch.Services.Factory;
@@ -35,6 +37,12 @@ internal sealed class FakeSearchService : HttpMessageHandler
     /// <summary>Everything the services logged.</summary>
     public List<(LogLevel Level, string Message)> Logs { get; } = [];
 
+    /// <summary>The notifications the services published through <see cref="IEventAggregator"/>.</summary>
+    public List<INotification> Notifications { get; } = [];
+
+    /// <summary>Runs for each published notification, e.g. to throw as a failing handler does.</summary>
+    public Action<INotification>? OnPublish { get; set; }
+
     /// <summary>Extra registrations, e.g. <c>ConfigureAzureSearchIndex</c> calls. Runs after <c>AddUmbracoAzureSearch</c>.</summary>
     public Action<IServiceCollection>? ConfigureServices { get; set; }
 
@@ -52,6 +60,7 @@ internal sealed class FakeSearchService : HttpMessageHandler
         var serviceCollection = new ServiceCollection()
             .AddLogging(logging => logging.AddProvider(new RecordingLoggerProvider(Logs)))
             .AddSingleton<IServerRoleAccessor>(new FixedServerRoleAccessor(serverRole))
+            .AddSingleton<IEventAggregator>(new RecordingEventAggregator(this))
             .AddUmbracoAzureSearch(configuration);
         ConfigureServices?.Invoke(serviceCollection);
         var services = serviceCollection.BuildServiceProvider();
@@ -151,6 +160,41 @@ internal sealed class FakeSearchService : HttpMessageHandler
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json")
         };
+    }
+
+    // Records what the services publish; Umbraco runs the handlers in PublishAsync, so OnPublish stands in for a handler.
+    private sealed class RecordingEventAggregator(FakeSearchService service) : IEventAggregator
+    {
+        public Task PublishAsync<TNotification>(TNotification notification, CancellationToken cancellationToken = default)
+            where TNotification : INotification
+        {
+            lock (service.Notifications)
+            {
+                service.Notifications.Add(notification);
+            }
+
+            service.OnPublish?.Invoke(notification);
+            return Task.CompletedTask;
+        }
+
+        public void Publish<TNotification>(TNotification notification) where TNotification : INotification
+            => PublishAsync(notification).GetAwaiter().GetResult();
+
+        public void Publish<TNotification, TNotificationHandler>(IEnumerable<TNotification> notifications)
+            where TNotification : INotification where TNotificationHandler : INotificationHandler
+            => throw new NotSupportedException();
+
+        public Task PublishAsync<TNotification, TNotificationHandler>(IEnumerable<TNotification> notifications, CancellationToken cancellationToken = default)
+            where TNotification : INotification where TNotificationHandler : INotificationHandler
+            => throw new NotSupportedException();
+
+        public bool PublishCancelable<TCancelableNotification>(TCancelableNotification notification)
+            where TCancelableNotification : ICancelableNotification
+            => throw new NotSupportedException();
+
+        public Task<bool> PublishCancelableAsync<TCancelableNotification>(TCancelableNotification notification)
+            where TCancelableNotification : ICancelableNotification
+            => throw new NotSupportedException();
     }
 
     private sealed class RecordingLoggerProvider(List<(LogLevel, string)> logs) : ILoggerProvider
