@@ -1,3 +1,4 @@
+using System.ClientModel.Primitives;
 using Azure.Search.Documents.Indexes.Models;
 using UmbracoAzureSearch.Constants;
 using UmbracoAzureSearch.Models;
@@ -145,6 +146,48 @@ internal static class IndexSchema
         index.Suggesters.Add(new SearchSuggester(IndexConstants.SuggesterName, fields.Select(f => f.Name).ToArray()));
     }
 
+    /// <summary>
+    /// Applies to a live index the parts of the index built from code that Azure changes without a rebuild: new fields,
+    /// scoring profiles and the default scoring profile. Returns true when the live index changed. Other differences,
+    /// such as analyzers, need a rebuild.
+    /// </summary>
+    public static bool ApplyLiveChanges(SearchIndex live, SearchIndex desired)
+    {
+        var changed = false;
+        var liveFields = live.Fields.Select(f => f.Name).ToHashSet();
+        foreach (var field in desired.Fields.Where(f => !liveFields.Contains(f.Name)))
+        {
+            live.Fields.Add(field);
+            changed = true;
+        }
+
+        foreach (var profile in desired.ScoringProfiles)
+        {
+            var existing = live.ScoringProfiles.FirstOrDefault(p => p.Name == profile.Name);
+            if (existing is not null && Json(existing) == Json(profile))
+                continue;
+
+            if (existing is not null)
+            {
+                live.ScoringProfiles.Remove(existing);
+            }
+
+            live.ScoringProfiles.Add(profile);
+            changed = true;
+        }
+
+        if (desired.DefaultScoringProfile != live.DefaultScoringProfile
+            && live.ScoringProfiles.Any(p => p.Name == desired.DefaultScoringProfile))
+        {
+            live.DefaultScoringProfile = desired.DefaultScoringProfile;
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    private static string Json<T>(T model) where T : IPersistableModel<T> => ModelReaderWriter.Write(model).ToString();
+
     // A null name keeps the Azure default (standard.lucene); the implicit string conversion would throw on null.
     private static LexicalAnalyzerName? Analyzer(string? name) => name is null ? (LexicalAnalyzerName?)null : new LexicalAnalyzerName(name);
 
@@ -158,8 +201,9 @@ internal static class IndexSchema
         };
 
     // The index definition in code; EnsureAsync, ResetAsync and the indexer create indexes from it.
-    public static SearchIndex Build(string indexName, IndexDefinition definition)
+    public static SearchIndex Build(PhysicalIndex physicalIndex, string indexAlias, IndexDefinition definition)
     {
+        var indexName = physicalIndex.Name;
         var newIndex = new SearchIndex(indexName, [
             new SearchField(IndexConstants.FieldNames.Id,  SearchFieldDataType.String)
             {
@@ -230,6 +274,13 @@ internal static class IndexSchema
         // Scoring profile to boost text relevance fields (R1 > R2 > R3 > base), copies included
         newIndex.ScoringProfiles.Add(RelevanceProfile(newIndex.Fields.Select(f => f.Name)));
         newIndex.DefaultScoringProfile = RelevanceProfileName;
+
+        // The consumer's changes run last, on every Azure index of the alias. The package does not validate them.
+        var context = new AzureSearchIndexContext(indexAlias, indexName, physicalIndex.Culture, physicalIndex.IsFallback);
+        foreach (var configure in definition.Options.IndexConfigurations)
+        {
+            configure(newIndex, context);
+        }
 
         return newIndex;
     }

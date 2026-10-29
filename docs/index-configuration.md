@@ -48,7 +48,7 @@ Index aliases match in any case. `umb_publishedcontent` configures `Umb_Publishe
 
 ## Code-only settings
 
-Content types, cultures and per-index indexers need types and logic, so only code sets them. See [Index definition](index-definition.md).
+Content types, cultures, per-index indexers and the `ConfigureIndex` and `ConfigureSearch` callbacks need types and logic, so only code sets them. See [Index definition](index-definition.md).
 
 ## Settings
 
@@ -64,6 +64,8 @@ Content types, cultures and per-index indexers need types and logic, so only cod
 | Culture analyzers | `Analyzers:Cultures:<culture>` | `.Analyzers(a => a.Culture("fr", ...))` | None | Yes | [Analyzers](analyzers.md) |
 | Invariant analyzer | `Analyzers:Invariant` | `.Analyzers(a => a.Invariant(...))` | `standard.lucene` | Yes | [Analyzers](analyzers.md) |
 | Suggestion analyzer | `Analyzers:SuggestionAnalyzer` | `.Analyzers(a => a.SuggestionAnalyzer(...))` | `PerCulture` | Yes | [Analyzers](analyzers.md#suggestionanalyzer) |
+| Index definition changes | Code only | `.ConfigureIndex(...)` | None | Depends on the change | [Customizing Azure](customizing-azure.md) |
+| Query changes | Code only | `.ConfigureSearch(...)` | None | No | [Customizing Azure](customizing-azure.md) |
 | Per-index indexers | Code only | `.Indexer<TIndexer>()` | None | Yes, to fill existing content | [Index definition](index-definition.md) |
 
 The appsettings keys are relative to `UmbracoAzureSearch:Indexes:<alias>`.

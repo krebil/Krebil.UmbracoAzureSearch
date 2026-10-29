@@ -1,3 +1,4 @@
+using Azure.Search.Documents;
 using Azure.Search.Documents.Indexes.Models;
 using Umbraco.Cms.Search.Core.Services.ContentIndexing;
 using UmbracoAzureSearch.Models;
@@ -51,6 +52,33 @@ public sealed class AzureSearchIndexBuilder
         }
 
         configure?.Invoke(new AzureSearchFieldBuilder(field));
+        return this;
+    }
+
+    /// <summary>
+    /// Changes the Azure index definition after the package builds it: custom analyzers, scoring profiles, extra fields.
+    /// Runs for every Azure index of the alias, at creation and at startup. The package does not validate the changes. Code only.
+    /// </summary>
+    public AzureSearchIndexBuilder ConfigureIndex(Action<SearchIndex> configure)
+        => ConfigureIndex((searchIndex, _) => configure(searchIndex));
+
+    /// <summary>
+    /// Changes the Azure index definition after the package builds it. The context names the Azure index, its culture
+    /// and whether it is the fallback index. The package does not validate the changes. Code only.
+    /// </summary>
+    public AzureSearchIndexBuilder ConfigureIndex(Action<SearchIndex, AzureSearchIndexContext> configure)
+    {
+        _options.IndexConfigurations = [.. _options.IndexConfigurations, configure];
+        return this;
+    }
+
+    /// <summary>
+    /// Changes each Azure query after the package sets its own search options. Add to <c>Filter</c> and <c>SearchFields</c>;
+    /// do not replace them, or culture and access filtering breaks. The package does not validate the changes. Code only.
+    /// </summary>
+    public AzureSearchIndexBuilder ConfigureSearch(Action<SearchOptions, AzureSearchRequest> configure)
+    {
+        _options.SearchConfigurations = [.. _options.SearchConfigurations, configure];
         return this;
     }
 

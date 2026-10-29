@@ -91,7 +91,7 @@ public class AzureSearchIndexer(
 
         var mappingResult = documentMapper.MapToDocuments(id, objectType, variations, fields, protection, definition);
 
-        var indexFields = await EnsureFieldsExist(physicalIndex.Name, mappingResult.FieldMappings, definition);
+        var indexFields = await EnsureFieldsExist(physicalIndex, indexAlias, mappingResult.FieldMappings, definition);
         DropMissingSuggestionCopies(physicalIndex.Name, mappingResult.Documents, indexFields);
         var batch = IndexDocumentsBatch.MergeOrUpload(mappingResult.Documents);
         logger.LogDebug("Indexing {DocumentCount} document(s) for {Id} into {IndexAlias} ({IndexName})", mappingResult.Documents.Count, id, indexAlias, physicalIndex.Name);
@@ -172,8 +172,10 @@ public class AzureSearchIndexer(
         static string Identifier(IndexField field) => $"{field.FieldName}|{field.Culture}|{field.Segment}";
     }
 
-    private async Task<HashSet<string>> EnsureFieldsExist(string indexName, List<IndexFieldMapping> fieldMappings, IndexDefinition definition)
+    private async Task<HashSet<string>> EnsureFieldsExist(
+        PhysicalIndex physicalIndex, string indexAlias, List<IndexFieldMapping> fieldMappings, IndexDefinition definition)
     {
+        var indexName = physicalIndex.Name;
         var indexClient = azureSearchClientFactory.GetSearchIndexClient();
         Response<SearchIndex> index;
         try
@@ -184,7 +186,7 @@ public class AzureSearchIndexer(
         {
             // The fallback index of IndexPerCulture, for the first document of a language outside the map.
             logger.LogWarning("Creating index {IndexName} for a culture outside the culture map. Rebuild the index to fill it with existing content.", indexName);
-            index = await indexClient.CreateIndexAsync(IndexSchema.Build(indexName, definition));
+            index = await indexClient.CreateIndexAsync(IndexSchema.Build(physicalIndex, indexAlias, definition));
         }
         index.ThrowIfNull();
 
