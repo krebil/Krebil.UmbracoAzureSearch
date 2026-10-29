@@ -72,6 +72,8 @@ The package checks the [index configuration](index-configuration.md#validation) 
 - An index whose fields exceed `UmbracoAzureSearch:MaxFieldsPerIndex`.
 - An unknown analyzer name in `Analyzers`, an analyzer that suggestion fields do not allow, and `FieldPerCulture` or `IndexPerCulture` without a mapped culture.
 - A spell check query language that the Azure lexicon speller does not support.
+- A scoring profile that uses a missing field or a field of the wrong type, a default profile that does not exist, more than 100 profiles, and a boost of 0 or less.
+- `RebuildMinimumDocumentPercent` outside 0 to 100, or a negative `RebuildDeleteDelaySeconds`.
 - `IndexPerCulture` on a backoffice index, and more Azure indexes than `UmbracoAzureSearch:MaxIndexes` when an index uses `IndexPerCulture`.
 
 ## What needs a rebuild
@@ -87,10 +89,20 @@ The package checks the [index configuration](index-configuration.md#validation) 
 | Add a per-index indexer | Yes, to fill existing content |
 | Add fields or scoring profiles with `ConfigureIndex` | No, applied at startup |
 | Turn on spell check for a culture | No |
+| Add, change or remove scoring profiles, boosts or the default profile | No |
+| Turn on `ZeroDowntimeRebuild` | First migration at the next rebuild. See [First migration](zero-downtime-rebuild.md#first-migration). |
 | Add analyzers or change existing fields with `ConfigureIndex` | Yes |
 | Change `Analyzers:Mode`, add a culture, change an analyzer | Yes |
 | Add an Umbraco language outside the culture map of an `IndexPerCulture` index | Yes, to fill the new fallback index |
 | Change `SuggestionAnalyzer` or suggestion fields | Yes |
+
+## Rebuild required at startup
+
+With `EnsureIndicesOnStartup()`, the package logs a "Rebuild required" warning at startup for each change that needs a rebuild. See [Definition changes at startup](zero-downtime-rebuild.md#definition-changes-at-startup) for the list. Changes that need no rebuild apply at startup.
+
+## Zero-downtime rebuild
+
+Turning on `ZeroDowntimeRebuild` takes effect at the next rebuild. The first rebuild replaces the plain index with an alias, with a short gap in searches. See [First migration](zero-downtime-rebuild.md#first-migration).
 
 ## Upgrade order
 

@@ -30,6 +30,6 @@ public class FieldOptions
     /// </summary>
     public bool? PerCulture { get; set; }
 
-    /// <summary>The relevance boost of the field. Stored for scoring profiles; it has no effect yet.</summary>
+    /// <summary>The relevance boost of the field, in the generated umbraco-boosts scoring profile. Greater than 0.</summary>
     public double? Boost { get; set; }
 }

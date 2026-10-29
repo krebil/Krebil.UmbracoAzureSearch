@@ -1,6 +1,9 @@
 using Azure.Core;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Umbraco.Cms.Core.Events;
+using Umbraco.Cms.Search.Core.Notifications;
 using Microsoft.Extensions.Options;
 using UmbracoAzureSearch.Configuration;
 using Throw;
@@ -16,6 +19,7 @@ using UmbracoAzureSearch.Services.Factory;
 using UmbracoAzureSearch.Services.IndexAliasResolver;
 using UmbracoAzureSearch.Services.Indexer;
 using UmbracoAzureSearch.Services.IndexManager;
+using UmbracoAzureSearch.Services.Scoring;
 using UmbracoAzureSearch.Services.Searcher;
 
 namespace UmbracoAzureSearch.Extensions;
@@ -50,6 +54,8 @@ public static class ServiceCollectionExtensions
             .AddSingleton<PhysicalIndexes>()
             .AddSingleton<IndexFieldNames>()
             .AddSingleton<SpellerState>()
+            .AddSingleton<IndexSlots>()
+            .AddSingleton<ScoringProfileSources>()
             .AddSingleton<IValidateOptions<AzureSearchIndexOptions>, AzureSearchIndexOptionsValidator>()
             .AddSingleton(sp => new AzureSearchIndexConfigurationSources(
                 configuration, sp.GetServices<AzureSearchIndexCodeConfiguration>()))
@@ -57,6 +63,8 @@ public static class ServiceCollectionExtensions
             .AddHostedService<AzureSearchIndexStartupCheck>()
             .AddTransient<IAzureSearchSearcher, AzureSearchSearcher>();
         
+        services.TryAddEnumerable(ServiceDescriptor.Transient<INotificationAsyncHandler<IndexRebuildCompletedNotification>, ZeroDowntimeRebuildHandler>());
+
         services.AddSingleton<ISearcher, AzureSearchSearcher>();
         services.AddSingleton<IIndexer, AzureSearchIndexer>();
 
@@ -97,6 +105,16 @@ public static class ServiceCollectionExtensions
         indexAlias.ThrowIfNull().IfEmpty().IfWhiteSpace();
         configure.ThrowIfNull();
         return services.AddSingleton(new AzureSearchIndexCodeConfiguration(indexAlias, configure));
+    }
+
+    /// <summary>
+    /// Adds a provider of scoring profiles. Several providers are allowed; on a name collision the later one wins.
+    /// </summary>
+    public static IServiceCollection AddScoringProfileProvider<TProvider>(this IServiceCollection services)
+        where TProvider : class, IScoringProfileProvider
+    {
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IScoringProfileProvider, TProvider>());
+        return services;
     }
 
     public static IUmbracoBuilder EnsureIndicesOnStartup(this IUmbracoBuilder builder)

@@ -122,6 +122,10 @@ internal sealed class FakeSearchService : HttpMessageHandler
         if (request.Method == HttpMethod.Delete)
             return new HttpResponseMessage(HttpStatusCode.NoContent);
 
+        // The service has no index aliases unless a test answers them.
+        if (request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath.Contains("/aliases("))
+            return Json("""{"error":{"code":"","message":"No alias with the name was found"}}""", HttpStatusCode.NotFound);
+
         if (UnknownField is { } unknown
             && (request.RequestUri!.AbsolutePath.Contains("search.post.search") || request.RequestUri.AbsolutePath.Contains("search.post.autocomplete"))
             && (UnknownFieldAlways || body?.Contains(unknown) == true))
