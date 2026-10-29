@@ -52,7 +52,8 @@ internal sealed class IndexDefinition(
         Options.Fields.TryGetValue(fieldName, out var field);
 
         // System fields are part of the Umbraco Search contract: deletes, the backoffice and the Delivery API filter on them.
-        var automatic = Options.AutomaticFields || IsSystemField(fieldName);
+        // The Delivery API index handler fields are what the Delivery API filters and sorts on.
+        var automatic = Options.AutomaticFields || IsSystemField(fieldName) || Options.IndexHandlerFields.ContainsKey(fieldName);
         if (field is null)
             return automatic ? Automatic with { Analyzer = TextAnalyzer } : null;
 

@@ -179,6 +179,13 @@ internal sealed class AzureSearchIndexOptionsValidator(IOptions<UmbracoAzureSear
                      + (field.Sortable ? 1 : 0);
         }
 
+        // An index handler field has the automatic attributes: a text is searchable (4), filterable (1) and sortable (1);
+        // other values are filterable and facetable (1) and sortable (1).
+        foreach (var fieldType in options.IndexHandlerFields.Where(f => !options.Fields.ContainsKey(f.Key) && !IndexDefinition.IsSystemField(f.Key)).Select(f => f.Value))
+        {
+            count += fieldType is Umbraco.Cms.Core.DeliveryApi.FieldType.StringAnalyzed or Umbraco.Cms.Core.DeliveryApi.FieldType.StringSortable ? 6 : 2;
+        }
+
         return count;
     }
 }

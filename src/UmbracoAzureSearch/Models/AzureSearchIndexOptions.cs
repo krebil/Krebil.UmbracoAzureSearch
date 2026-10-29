@@ -1,5 +1,6 @@
 using Azure.Search.Documents;
 using Azure.Search.Documents.Indexes.Models;
+using Umbraco.Cms.Core.DeliveryApi;
 
 namespace UmbracoAzureSearch.Models;
 
@@ -47,10 +48,18 @@ public class AzureSearchIndexOptions
     public AnalyzerOptions Analyzers { get; set; } = new();
 
     /// <summary>
-    /// Writes every field the Umbraco Search indexers produce. Off writes only the opted-in <see cref="Fields"/>
-    /// and the Umbraco system fields (<c>Umb_*</c>). On by default.
+    /// Writes every field the Umbraco Search indexers produce. Off writes only the opted-in <see cref="Fields"/>,
+    /// the <see cref="IndexHandlerFields"/> and the Umbraco system fields (<c>Umb_*</c>). On by default.
     /// </summary>
     public bool AutomaticFields { get; set; } = true;
+
+    /// <summary>
+    /// The fields of the Delivery API index handlers (<c>IContentIndexHandler</c>), by field name. They count as opted in,
+    /// with the automatic attributes, so Delivery API filters and sorts keep working when <see cref="AutomaticFields"/> is
+    /// off. An entry in <see cref="Fields"/> still changes their attributes. Filled from the registered handlers.
+    /// </summary>
+    public IReadOnlyDictionary<string, FieldType> IndexHandlerFields { get; internal set; }
+        = new Dictionary<string, FieldType>(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Opted-in fields and their attributes, keyed by Umbraco field name (case-insensitive).</summary>
     public Dictionary<string, FieldOptions> Fields { get; set; } = new(StringComparer.OrdinalIgnoreCase);
