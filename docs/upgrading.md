@@ -67,6 +67,9 @@ The package now reads `UmbracoAzureSearch:Serverless`. Before, only `UmbracoAzur
 The package checks the [index configuration](index-configuration.md#validation) at startup. A configuration that worked before can now stop startup:
 
 - An alias under `UmbracoAzureSearch:Indexes`, or in `ConfigureAzureSearchIndex`, that Umbraco Search does not register. A typo in an alias is the usual cause. The old `Suggestions` location is not checked.
+- A field that is suggestable but not searchable.
+- A field with an analyzer that Azure does not have.
+- An index with automatic fields off whose fields exceed `UmbracoAzureSearch:MaxFieldsPerIndex`.
 
 ## What needs a rebuild
 
@@ -74,6 +77,11 @@ The package checks the [index configuration](index-configuration.md#validation) 
 |---|---|
 | Upgrade from a version before 17.3.0 or 18.2.0 to get term suggestions | Yes, to fill suggestions for existing content. See [Suggestions](suggestions.md#upgrading). |
 | Move the `Suggestions` settings, same values | No |
+| Opt in a new field | No |
+| Turn automatic fields off on an existing index | Yes. Azure cannot remove fields. |
+| Change searchable, filterable, facetable, sortable or the analyzer of an existing field | Yes |
+| Change the content types or cultures of an index | Yes |
+| Add a per-index indexer | Yes, to fill existing content |
 
 ## Upgrade order
 

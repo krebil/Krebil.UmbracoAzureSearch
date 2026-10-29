@@ -21,6 +21,12 @@ public class UmbracoAzureSearchOptions
     /// </summary>
     public bool IsServerless { get; set; }
 
+    /// <summary>
+    /// The most fields Azure allows in one index on this service: 1000, or 100 on Basic services created before April 3, 2024.
+    /// Startup validation checks indexes with automatic fields off against it.
+    /// </summary>
+    public int MaxFieldsPerIndex { get; set; } = 1000;
+
     // Keyed by Umbraco index alias (before the environment suffix); an alias without an entry uses the defaults.
     [Obsolete("Use UmbracoAzureSearch:Indexes:<alias>:Suggestions or ConfigureAzureSearchIndex. This location is read while the new one is unset.")]
     public Dictionary<string, SuggestionOptions> Suggestions { get; set; } = new(StringComparer.OrdinalIgnoreCase);
