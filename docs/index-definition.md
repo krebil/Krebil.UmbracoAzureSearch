@@ -84,6 +84,27 @@ Their texts also feed the free-text query on all fields (`allTexts`).
 
 The Umbraco system fields (`Umb_Id`, `Umb_ParentId`, `Umb_PathIds`, `Umb_ContentTypeId`, `Umb_Name`, `Umb_CreateDate`, `Umb_UpdateDate`, `Umb_Level`, `Umb_SortOrder`, `Umb_ObjectType`, `Umb_Tags`) are always written. Deletes, the backoffice and the Delivery API use them.
 
+## Check the fields of an index
+
+`AzureSearchIndexOptions.ResolveField(fieldName)` returns the attributes a field gets in the index. It returns null when the index does not keep the field. It uses the same rule as the indexer, so a test can check the definition of an index without Azure.
+
+Get the options from the container. The package adds the [Delivery API index handler fields](#automatic-fields) to them after your configuration, so options that you create yourself do not have them.
+
+```csharp
+var options = serviceProvider
+    .GetRequiredService<IOptionsMonitor<AzureSearchIndexOptions>>()
+    .Get("siteSearch");
+
+AzureSearchFieldAttributes? date = options.ResolveField("date");
+// With .Field("date", f => f.Filterable().Sortable()) and automatic fields off:
+// Searchable false, Filterable true, Facetable false, Sortable true, Suggestable false.
+
+AzureSearchFieldAttributes? body = options.ResolveField("body");
+// Null: automatic fields are off and "body" is not opted in.
+```
+
+`AzureSearchFieldAttributes` is a record in `UmbracoAzureSearch.Models` with the properties `Searchable`, `Filterable`, `Facetable`, `Sortable` and `Suggestable`. Field names are case-insensitive.
+
 ## Field attributes
 
 | Attribute | appsettings | Builder method | Azure meaning |

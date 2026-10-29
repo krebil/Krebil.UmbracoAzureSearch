@@ -1,6 +1,7 @@
 using Azure.Search.Documents;
 using Azure.Search.Documents.Indexes.Models;
 using Umbraco.Cms.Core.DeliveryApi;
+using UmbracoAzureSearch.Services.Indexer;
 
 namespace UmbracoAzureSearch.Models;
 
@@ -87,4 +88,15 @@ public class AzureSearchIndexOptions
     /// Code only.
     /// </summary>
     public IReadOnlyList<Action<SearchOptions, AzureSearchRequest>> SearchConfigurations { get; internal set; } = [];
+
+    /// <summary>
+    /// The attributes a field gets in the index, with the rule the indexer uses, or null when the index does not keep the
+    /// field. Use the options from <c>IOptionsMonitor&lt;AzureSearchIndexOptions&gt;.Get(alias)</c>. Only those options
+    /// include the <see cref="IndexHandlerFields"/>.
+    /// </summary>
+    /// <param name="fieldName">The Umbraco field name (case-insensitive).</param>
+    public AzureSearchFieldAttributes? ResolveField(string fieldName)
+        => new IndexDefinition(this).Resolve(fieldName) is { } field
+            ? new AzureSearchFieldAttributes(field.Searchable, field.Filterable, field.Facetable, field.Sortable, field.Suggestable)
+            : null;
 }
