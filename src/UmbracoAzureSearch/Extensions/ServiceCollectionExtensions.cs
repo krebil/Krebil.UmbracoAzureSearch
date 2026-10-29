@@ -49,6 +49,7 @@ public static class ServiceCollectionExtensions
             .AddSingleton<IUmbracoContentSource, UmbracoContentSource>()
             .AddSingleton<PhysicalIndexes>()
             .AddSingleton<IndexFieldNames>()
+            .AddSingleton<SpellerState>()
             .AddSingleton<IValidateOptions<AzureSearchIndexOptions>, AzureSearchIndexOptionsValidator>()
             .AddSingleton(sp => new AzureSearchIndexConfigurationSources(
                 configuration, sp.GetServices<AzureSearchIndexCodeConfiguration>()))

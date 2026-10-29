@@ -252,6 +252,16 @@ public class AzureSearchSearcher(
                 // Repeated without the field. An error about a field the search did not ask for comes back unchanged
                 // the second time and is not swallowed.
             }
+            catch (Azure.RequestFailedException ex) when (ex.Status == 400
+                && (ex.Message.Contains("speller", StringComparison.OrdinalIgnoreCase) || ex.Message.Contains("queryLanguage", StringComparison.OrdinalIgnoreCase))
+                && SpellCheckIndexName(indexAlias, culture) is { } indexName
+                && serviceProvider.GetRequiredService<SpellerState>().Reject(indexName))
+            {
+                // A service without the speller (Free tier, for example). The search runs again without spell check.
+                logger.LogWarning(
+                    "The search service rejected spell check for index {IndexAlias} ({Message}). Searches on it run without spell check until the application restarts.",
+                    indexAlias, ex.Message);
+            }
         }
     }
 
@@ -301,6 +311,18 @@ public class AzureSearchSearcher(
         var searchText = string.IsNullOrWhiteSpace(query)
             ? "*"
             : query.Contains(' ') ? query : $"{query}*";
+
+        // Spell check: the lexicon speller corrects the query terms of a mapped culture. Azure does not correct prefix
+        // (one-word, "*") queries, and returns no corrected text.
+        if (definition.QueryLanguage(culture) is { } queryLanguage
+            && !serviceProvider.GetRequiredService<SpellerState>().IsRejected(physicalIndex.Name))
+        {
+            searchOptions.SemanticSearch = new SemanticSearchOptions
+            {
+                QuerySpeller = QuerySpellerType.Lexicon,
+                QueryLanguage = queryLanguage,
+            };
+        }
 
         // FieldPerCulture: search the copies of the request culture plus the invariant copies, analyzed per culture.
         var searchFields = SearchFields(definition, culture);
@@ -414,6 +436,9 @@ public class AzureSearchSearcher(
             {
                 facetSearchOptions.SearchFields.Add(field);
             }
+
+            // The same search text, so the same spell check, keeps the facet counts in line with the results.
+            facetSearchOptions.SemanticSearch = searchOptions.SemanticSearch;
 
             foreach (var expr in sameFieldFacetExpressions)
             {
@@ -613,6 +638,15 @@ public class AzureSearchSearcher(
         }
 
         return baseFilterClauses;
+    }
+
+    // The Azure index of a search that spell check applies to, or null when the culture has no spell check.
+    private string? SpellCheckIndexName(string indexAlias, string? culture)
+    {
+        var definition = new IndexDefinition(azureSearchIndexOptions.Get(indexAlias));
+        return definition.QueryLanguage(culture) is null
+            ? null
+            : serviceProvider.GetRequiredService<PhysicalIndexes>().ForCulture(indexAlias, definition, culture ?? string.Empty).Name;
     }
 
     private static bool IsMissingSuggester(RequestFailedException ex)
