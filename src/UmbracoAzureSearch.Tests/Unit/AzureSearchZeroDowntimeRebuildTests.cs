@@ -12,6 +12,7 @@ using Umbraco.Cms.Search.Core.Services;
 using Umbraco.Cms.Search.Core.Services.ContentIndexing;
 using UmbracoAzureSearch.Configuration;
 using UmbracoAzureSearch.Extensions;
+using UmbracoAzureSearch.Notifications;
 using UmbracoAzureSearch.Services.Indexer;
 using UmbracoAzureSearch.Services.IndexManager;
 using UmbracoAzureSearch.Services.Searcher;
@@ -53,6 +54,9 @@ public class AzureSearchZeroDowntimeRebuildTests
 
     private static string[] Messages(FakeSearchService service, LogLevel level)
         => service.Logs.Where(l => l.Level == level).Select(l => l.Message).ToArray();
+
+    private static IndexSwappedNotification[] Swapped(FakeSearchService service)
+        => service.Notifications.OfType<IndexSwappedNotification>().ToArray();
 
     [Test]
     public async Task CreatesANewIndexAsSlotABehindAnAlias()
@@ -165,6 +169,75 @@ public class AzureSearchZeroDowntimeRebuildTests
     }
 
     [Test]
+    public async Task PublishesIndexSwappedAfterTheSwap()
+    {
+        var (service, azure) = Service();
+        azure.Indexes.Add(SlotA);
+        azure.Aliases[Name] = SlotA;
+        azure.Counts[SlotA] = 100;
+        var services = service.CreateServices();
+        string? aliasAtPublish = null;
+        string[] indexesAtPublish = [];
+        service.OnPublish = _ =>
+        {
+            aliasAtPublish = azure.Aliases[Name];
+            indexesAtPublish = azure.Indexes.ToArray();
+        };
+
+        await services.GetRequiredService<IIndexer>().ResetAsync(IndexAlias);
+        azure.Counts[SlotB] = 98;
+        await CompleteAsync(services);
+
+        var notification = Swapped(service).Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(notification.IndexAlias, Is.EqualTo(IndexAlias));
+            Assert.That(notification.Swaps, Is.EqualTo(new[] { new AzureIndexSwap(Name, SlotA, SlotB) }));
+            Assert.That(aliasAtPublish, Is.EqualTo(SlotB), "The notification comes after the alias moved.");
+            Assert.That(indexesAtPublish, Does.Contain(SlotA), "The notification comes before the old index goes.");
+        });
+    }
+
+    [Test]
+    public async Task DoesNotPublishIndexSwappedWhenTheAliasUpdateFails()
+    {
+        var (service, azure) = Service();
+        azure.Indexes.Add(SlotA);
+        azure.Aliases[Name] = SlotA;
+        azure.FailAliasUpdates = true;
+        var services = service.CreateServices();
+
+        await services.GetRequiredService<IIndexer>().ResetAsync(IndexAlias);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(async () => await CompleteAsync(services), Throws.InstanceOf<Azure.RequestFailedException>());
+            Assert.That(Swapped(service), Is.Empty);
+            Assert.That(azure.Aliases[Name], Is.EqualTo(SlotA));
+        });
+    }
+
+    [Test]
+    public async Task AFailingIndexSwappedHandlerDoesNotStopTheDelete()
+    {
+        var (service, azure) = Service();
+        azure.Indexes.Add(SlotA);
+        azure.Aliases[Name] = SlotA;
+        var services = service.CreateServices();
+        service.OnPublish = _ => throw new InvalidOperationException("Handler failed");
+
+        await services.GetRequiredService<IIndexer>().ResetAsync(IndexAlias);
+        await CompleteAsync(services);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(azure.Aliases[Name], Is.EqualTo(SlotB));
+            Assert.That(azure.Indexes, Is.EquivalentTo(new[] { SlotB }));
+            Assert.That(Messages(service, LogLevel.Error), Has.One.Contains("IndexSwappedNotification").And.Contains(IndexAlias));
+        });
+    }
+
+    [Test]
     public async Task SkipsTheSwapOfACancelledRebuild()
     {
         var (service, azure) = Service();
@@ -180,6 +253,7 @@ public class AzureSearchZeroDowntimeRebuildTests
             Assert.That(azure.Aliases[Name], Is.EqualTo(SlotA));
             Assert.That(azure.Indexes, Is.EquivalentTo(new[] { SlotA }));
             Assert.That(Messages(service, LogLevel.Warning), Has.One.Contains("Swap skipped").And.Contains("cancelled"));
+            Assert.That(Swapped(service), Is.Empty);
         });
     }
 
@@ -201,6 +275,7 @@ public class AzureSearchZeroDowntimeRebuildTests
             Assert.That(azure.Aliases[Name], Is.EqualTo(SlotA));
             Assert.That(azure.Indexes, Is.EquivalentTo(new[] { SlotA }));
             Assert.That(Messages(service, LogLevel.Warning), Has.One.Contains("count check").And.Contains("100/49"));
+            Assert.That(Swapped(service), Is.Empty);
         });
     }
 
@@ -260,6 +335,11 @@ public class AzureSearchZeroDowntimeRebuildTests
                 [$"{Name}-en"] = $"{Name}-en-b",
             }));
             Assert.That(azure.Indexes, Is.EquivalentTo(new[] { $"{Name}-fr-b", $"{Name}-en-b" }));
+            Assert.That(Swapped(service).Single().Swaps, Is.EquivalentTo(new[]
+            {
+                new AzureIndexSwap($"{Name}-fr", $"{Name}-fr-a", $"{Name}-fr-b"),
+                new AzureIndexSwap($"{Name}-en", $"{Name}-en-a", $"{Name}-en-b"),
+            }), "One notification for the Umbraco index, after all its Azure aliases moved.");
         });
     }
 
@@ -320,6 +400,7 @@ public class AzureSearchZeroDowntimeRebuildTests
         public Dictionary<string, int> Writes { get; } = [];
         public List<string> Searches { get; } = [];
         public List<string> Statistics { get; } = [];
+        public bool FailAliasUpdates { get; set; }
 
         public HttpResponseMessage? Respond(HttpRequestMessage request)
         {
@@ -334,6 +415,8 @@ public class AzureSearchZeroDowntimeRebuildTests
                     return Aliases.TryGetValue(alias, out var target)
                         ? FakeSearchService.Json($$"""{"name":"{{alias}}","indexes":["{{target}}"]}""")
                         : NotFound();
+                if (method == HttpMethod.Put && FailAliasUpdates)
+                    return FakeSearchService.Json("""{"error":{"code":"","message":"Alias update failed"}}""", HttpStatusCode.BadRequest);
                 if (method == HttpMethod.Put)
                 {
                     Aliases[alias] = JsonDocument.Parse(request.Content!.ReadAsStringAsync().Result).RootElement.GetProperty("indexes")[0].GetString()!;
