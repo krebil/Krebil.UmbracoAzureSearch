@@ -2,6 +2,8 @@ using System.Reflection;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using UmbracoAzureSearch.Models;
+using Microsoft.Extensions.Options;
 using Umbraco.Cms.Core.Models;
 using Umbraco.Cms.Search.Core.Models.Indexing;
 using Umbraco.Cms.Search.Core.Services;
@@ -141,6 +143,26 @@ public class AzureSearchIndexDefinitionTests
             Text("body", "hidden text"));
 
         Assert.That(AllTexts(Documents(service).Single()), Is.EquivalentTo(new[] { "Red boat", "Sails at dawn" }));
+    }
+
+    // The Delivery API indexer writes fields for documents only, so media and member indexes do not get them.
+    [Test]
+    public void OnlyIndexesThatHoldDocumentsGetIndexHandlerFields()
+    {
+        var service = Service();
+        WithIndexHandler(service, new Umbraco.Cms.Core.DeliveryApi.IndexField
+        {
+            FieldName = "universe", FieldType = Umbraco.Cms.Core.DeliveryApi.FieldType.StringRaw, VariesByCulture = false,
+        });
+
+        var options = service.CreateServices().GetRequiredService<IOptionsMonitor<AzureSearchIndexOptions>>();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.Get(IndexAlias).IndexHandlerFields.Keys, Is.EqualTo(new[] { "universe" }));
+            Assert.That(options.Get(Umbraco.Cms.Search.Core.Constants.IndexAliases.DraftMembers).IndexHandlerFields, Is.Empty);
+            Assert.That(options.Get(Umbraco.Cms.Search.Core.Constants.IndexAliases.DraftMedia).IndexHandlerFields, Is.Empty);
+        });
     }
 
     [Test]

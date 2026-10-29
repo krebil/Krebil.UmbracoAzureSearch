@@ -78,7 +78,7 @@ An opt-in changes the attributes of an automatic field. An attribute that the op
 With `AutomaticFields` off, a field is in the index only when it is opted in. An attribute that the opt-in does not set is off. This applies to every indexer, except for these fields, which always count as opted in with the automatic attributes:
 
 - The Umbraco system fields (see below).
-- The fields of the Delivery API index handlers (`IContentIndexHandler`). The package reads them from the registered handlers, so the Delivery API filters and sorts keep working. An opt-in of such a field changes the attributes it sets, and the other attributes keep their automatic value.
+- The fields of the Delivery API index handlers (`IContentIndexHandler`), in indexes that hold documents. The package reads them from the registered handlers, so the Delivery API filters and sorts keep working. An opt-in of such a field changes the attributes it sets, and the other attributes keep their automatic value.
 
 Their texts also feed the free-text query on all fields (`allTexts`).
 
