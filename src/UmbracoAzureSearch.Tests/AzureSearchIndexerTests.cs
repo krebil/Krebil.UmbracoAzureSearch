@@ -135,6 +135,95 @@ public class AzureSearchIndexerTests : AzureSearchTestBase
         await Indexer.ResetAsync(IndexAlias);
     }
 
+    [Test]
+    public async Task ReindexingRemovesFieldsTheContentNoLongerHas()
+    {
+        await IndexManager.EnsureAsync(IndexAlias);
+
+        var id = Guid.NewGuid();
+        var universe = Guid.NewGuid().AsKeyword();
+        IndexField pathIds = new(
+            Umbraco.Cms.Search.Core.Constants.FieldNames.PathIds,
+            new IndexValue { Keywords = [id.AsKeyword()] },
+            Culture: null,
+            Segment: null);
+
+        await Indexer.AddOrUpdateAsync(
+            IndexAlias,
+            id,
+            UmbracoObjectTypes.Unknown,
+            [new Variation(Culture: null, Segment: null)],
+            [pathIds, new IndexField("universe", new IndexValue { Keywords = [universe] }, Culture: null, Segment: null)],
+            null);
+
+        await WaitForIndexingOperationsToCompleteAsync();
+
+        SearchResult result = await SearchAsync(filters: [new KeywordFilter("universe", [universe], false)]);
+        Assert.That(result.Total, Is.EqualTo(1));
+
+        // The editor clears the value, so the field is no longer part of the indexed fields.
+        await Indexer.AddOrUpdateAsync(
+            IndexAlias,
+            id,
+            UmbracoObjectTypes.Unknown,
+            [new Variation(Culture: null, Segment: null)],
+            [pathIds],
+            null);
+
+        await WaitForIndexingOperationsToCompleteAsync();
+
+        result = await SearchAsync(filters: [new KeywordFilter("universe", [universe], false)]);
+        Assert.That(result.Total, Is.Zero);
+
+        await Indexer.ResetAsync(IndexAlias);
+    }
+
+    [Test]
+    public async Task ReindexingRemovesVariationsTheContentNoLongerHas()
+    {
+        await IndexManager.EnsureAsync(IndexAlias);
+
+        var id = Guid.NewGuid();
+        Filter[] byId =
+        [
+            new KeywordFilter(Umbraco.Cms.Search.Core.Constants.FieldNames.PathIds, [id.AsKeyword()], false)
+        ];
+
+        await IndexCulturesAsync(id, "en-US", "da-DK");
+        await WaitForIndexingOperationsToCompleteAsync();
+
+        Assert.That((await SearchAsync(filters: byId, culture: "da-DK")).Total, Is.EqualTo(1));
+
+        // The da-DK culture is unpublished, so the next reindex only holds en-US.
+        await IndexCulturesAsync(id, "en-US");
+        await WaitForIndexingOperationsToCompleteAsync();
+
+        SearchResult danish = await SearchAsync(filters: byId, culture: "da-DK");
+        SearchResult english = await SearchAsync(filters: byId, culture: "en-US");
+        Assert.Multiple(() =>
+        {
+            Assert.That(danish.Total, Is.Zero);
+            Assert.That(english.Total, Is.EqualTo(1));
+        });
+
+        await Indexer.ResetAsync(IndexAlias);
+    }
+
+    private async Task IndexCulturesAsync(Guid id, params string[] cultures)
+        => await Indexer.AddOrUpdateAsync(
+            IndexAlias,
+            id,
+            UmbracoObjectTypes.Unknown,
+            cultures.Select(culture => new Variation(Culture: culture, Segment: null)).ToArray(),
+            [
+                new IndexField(
+                    Umbraco.Cms.Search.Core.Constants.FieldNames.PathIds,
+                    new IndexValue { Keywords = [id.AsKeyword()] },
+                    Culture: null,
+                    Segment: null)
+            ],
+            null);
+
     private async Task<Dictionary<string, Guid>> CreateIndexStructure()
     {
         var ids = new Dictionary<string, Guid>();
