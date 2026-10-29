@@ -404,6 +404,45 @@ public class AzureSearchIndexDefinitionTests
         Assert.DoesNotThrowAsync(() => StartAsync(service));
     }
 
+    // Consumers check the fields of an index with the rule the indexer uses, from the options in the container.
+    private static AzureSearchIndexOptions Options(FakeSearchService service)
+        => service.CreateServices().GetRequiredService<IOptionsMonitor<AzureSearchIndexOptions>>().Get(IndexAlias);
+
+    [Test]
+    public void ResolveFieldKeepsEveryFieldWithAutomaticFieldsOn()
+    {
+        var options = Options(Service());
+
+        Assert.That(options.ResolveField("anyField"), Is.EqualTo(new AzureSearchFieldAttributes(
+            Searchable: true, Filterable: true, Facetable: true, Sortable: true, Suggestable: false)));
+    }
+
+    [Test]
+    public void ResolveFieldWithAutomaticFieldsOff()
+    {
+        var service = Service(index => index
+            .AutomaticFields(false)
+            .Field("author", f => f.Filterable())
+            .Field("title", f => f.Searchable().Suggestable()));
+        WithIndexHandler(service, new Umbraco.Cms.Core.DeliveryApi.IndexField
+        {
+            FieldName = "universe", FieldType = Umbraco.Cms.Core.DeliveryApi.FieldType.StringRaw, VariesByCulture = false,
+        });
+        var options = Options(service);
+        var automatic = new AzureSearchFieldAttributes(Searchable: true, Filterable: true, Facetable: true, Sortable: true, Suggestable: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.ResolveField(Umbraco.Cms.Search.Core.Constants.FieldNames.PathIds), Is.EqualTo(automatic), "System field");
+            Assert.That(options.ResolveField("universe"), Is.EqualTo(automatic), "Index handler field");
+            Assert.That(options.ResolveField("author"), Is.EqualTo(new AzureSearchFieldAttributes(
+                Searchable: false, Filterable: true, Facetable: false, Sortable: false, Suggestable: false)));
+            Assert.That(options.ResolveField("TITLE"), Is.EqualTo(new AzureSearchFieldAttributes(
+                Searchable: true, Filterable: false, Facetable: false, Sortable: false, Suggestable: true)), "Field names are case-insensitive");
+            Assert.That(options.ResolveField("body"), Is.Null);
+        });
+    }
+
     private static async Task StartAsync(FakeSearchService service)
     {
         foreach (var hostedService in service.CreateServices().GetServices<IHostedService>())
