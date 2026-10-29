@@ -102,7 +102,7 @@ public class AzureSearchIndexManagerSuggestionTests
     public async Task DoesNotAddSuggestionsWhenTheyAreDisabledForTheIndex()
     {
         var service = ServiceWithIndex(IndexWithoutSuggestions);
-        service.Settings[$"UmbracoAzureSearch:Suggestions:{IndexAlias}:Enabled"] = "false";
+        service.Settings[$"UmbracoAzureSearch:Indexes:{IndexAlias}:Suggestions:Enabled"] = "false";
 
         await IndexManager(service).EnsureAsync(IndexAlias);
 
@@ -113,7 +113,7 @@ public class AzureSearchIndexManagerSuggestionTests
     public async Task CreatesANewIndexWithoutSuggestionsWhenTheyAreDisabled()
     {
         var service = ServiceWithIndex(null);
-        service.Settings[$"UmbracoAzureSearch:Suggestions:{IndexAlias}:Enabled"] = "false";
+        service.Settings[$"UmbracoAzureSearch:Indexes:{IndexAlias}:Suggestions:Enabled"] = "false";
 
         await IndexManager(service).EnsureAsync(IndexAlias);
 
@@ -145,7 +145,7 @@ public class AzureSearchIndexManagerSuggestionTests
     public async Task ResetDropsSuggestionsWhenTheyAreDisabled()
     {
         var service = ServiceWithIndex(IndexWithSuggestions);
-        service.Settings[$"UmbracoAzureSearch:Suggestions:{IndexAlias}:Enabled"] = "false";
+        service.Settings[$"UmbracoAzureSearch:Indexes:{IndexAlias}:Suggestions:Enabled"] = "false";
 
         await IndexManager(service).ResetAsync(IndexAlias);
 

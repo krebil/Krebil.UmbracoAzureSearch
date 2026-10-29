@@ -22,7 +22,7 @@ public class AzureSearchIndexer(
     IIndexAliasResolver indexAliasResolver,
     ILogger<AzureSearchIndexer> logger,
     DocumentMapper documentMapper,
-    IOptions<UmbracoAzureSearchOptions> azureSearchOptions) : UmbracoAzureServiceBase(serverRoleAccessor), IAzureSearchIndexer
+    IOptionsMonitor<AzureSearchIndexOptions> azureSearchIndexOptions) : UmbracoAzureServiceBase(serverRoleAccessor), IAzureSearchIndexer
 {
     public async Task AddOrUpdateAsync(string indexAlias, Guid id, UmbracoObjectTypes objectType,
         IEnumerable<Variation> variations,
@@ -34,7 +34,7 @@ public class AzureSearchIndexer(
         var searchClient = azureSearchClientFactory.GetSearchClient(indexAlias);
 
         var mappingResult = documentMapper.MapToDocuments(
-            id, objectType, variations, fields, protection, azureSearchOptions.Value.GetSuggestionOptions(indexAlias));
+            id, objectType, variations, fields, protection, azureSearchIndexOptions.Get(indexAlias).Suggestions);
 
         await EnsureFieldsExist(indexAlias, mappingResult.FieldMappings);
         var batch = IndexDocumentsBatch.MergeOrUpload(mappingResult.Documents);
