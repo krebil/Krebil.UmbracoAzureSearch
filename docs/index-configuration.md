@@ -56,6 +56,13 @@ Content types, cultures, per-index indexers and the `ConfigureIndex` and `Config
 |---|---|---|---|---|---|
 | Suggestions on or off | `Suggestions:Enabled` | `.Suggestions(bool)` | `true` | Yes, to fill suggestions after turning them on | [Suggestions](suggestions.md) |
 | Suggestion fields | `Suggestions:Fields` | `.SuggestionFields(params string[])` | Highest-relevance texts | Yes | [Suggestions](suggestions.md) |
+| Suggestion highlight tags | `Suggestions:HighlightPreTag`, `Suggestions:HighlightPostTag` | `.SuggestionHighlight(pre, post)` | `<em>`, `</em>` | No | [Suggestions](suggestions.md#highlights) |
+| Zero-downtime rebuild | `ZeroDowntimeRebuild` | `.ZeroDowntimeRebuild()` | `false` | Takes effect at the next rebuild | [Zero-downtime rebuild](zero-downtime-rebuild.md) |
+| Count check before the swap | `RebuildMinimumDocumentPercent` | `.ZeroDowntimeRebuild(r => r.MinimumDocumentPercent(50))` | `50` | No | [Zero-downtime rebuild](zero-downtime-rebuild.md#count-check) |
+| Wait before the delete | `RebuildDeleteDelaySeconds` | `.ZeroDowntimeRebuild(r => r.DeleteDelay(...))` | `10` | No | [Zero-downtime rebuild](zero-downtime-rebuild.md#wait-before-delete) |
+| Clear the document cache on rebuild | `ClearDocumentCacheOnRebuild` | `.ClearDocumentCacheOnRebuild()` | `false` | No | [Zero-downtime rebuild](zero-downtime-rebuild.md#cleardocumentcacheonrebuild) |
+| Default scoring profile | `DefaultScoringProfile` | `.DefaultScoringProfile(name)` | `umbraco-boosts` with boosts, otherwise `relevanceBoost` | No | [Scoring profiles](scoring-profiles.md#default-profile) |
+| Spell check per culture | `SpellCheck:Cultures:<culture>` | `.SpellCheck(s => s.Culture("en", ...))` | Off | No | [Spell check](spell-check.md) |
 | Automatic fields | `AutomaticFields` | `.AutomaticFields(bool)` | `true` | Yes, to turn it off on an existing index | [Index definition](index-definition.md) |
 | Opted-in fields and attributes | `Fields:<field>` | `.Field("<field>", f => ...)` | None | Yes, to change an attribute of an existing field | [Index definition](index-definition.md) |
 | Content types | Code only | `.ContentTypes(params string[])` | Every content type | Yes | [Index definition](index-definition.md) |

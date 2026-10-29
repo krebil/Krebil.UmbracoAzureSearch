@@ -18,6 +18,7 @@ using UmbracoAzureSearch.Models;
 using UmbracoAzureSearch.Services.Factory;
 using UmbracoAzureSearch.Services.IndexAliasResolver;
 using UmbracoAzureSearch.Services.IndexManager;
+using UmbracoAzureSearch.Services.Scoring;
 
 namespace UmbracoAzureSearch.Services.Indexer;
 
@@ -98,6 +99,23 @@ public class AzureSearchIndexer(
     }
 
     private async Task WriteAsync(
+        string indexAlias,
+        PhysicalIndex physicalIndex,
+        IndexDefinition definition,
+        Guid id,
+        UmbracoObjectTypes objectType,
+        Variation[] variations,
+        IReadOnlyCollection<IndexField> fields,
+        ContentProtection? protection)
+    {
+        // Zero-downtime rebuild: during a rebuild the old and the new index both get the write.
+        foreach (var target in await serviceProvider.GetRequiredService<IndexSlots>().WriteTargetsAsync(physicalIndex.Name, definition))
+        {
+            await WriteToIndexAsync(indexAlias, physicalIndex with { Name = target }, definition, id, objectType, variations, fields, protection);
+        }
+    }
+
+    private async Task WriteToIndexAsync(
         string indexAlias,
         PhysicalIndex physicalIndex,
         IndexDefinition definition,
@@ -257,7 +275,8 @@ public class AzureSearchIndexer(
         {
             // The fallback index of IndexPerCulture, for the first document of a language outside the map.
             logger.LogWarning("Creating index {IndexName} for a culture outside the culture map. Rebuild the index to fill it with existing content.", indexName);
-            index = await indexClient.CreateIndexAsync(IndexSchema.Build(physicalIndex, indexAlias, definition));
+            var profiles = await serviceProvider.GetRequiredService<ScoringProfileSources>().GetAsync(indexAlias);
+            index = await indexClient.CreateIndexAsync(IndexSchema.Build(physicalIndex, indexAlias, definition.WithProviderProfiles(profiles)));
         }
         index.ThrowIfNull();
 
@@ -338,13 +357,16 @@ public class AzureSearchIndexer(
         var idList = ids.ToArray();
         foreach (var physicalIndex in await serviceProvider.GetRequiredService<PhysicalIndexes>().AllAsync(indexAlias, definition))
         {
-            try
+            foreach (var target in await serviceProvider.GetRequiredService<IndexSlots>().WriteTargetsAsync(physicalIndex.Name, definition))
             {
-                await DeleteAsync(indexAlias, azureSearchClientFactory.GetSearchIndexClient().GetSearchClient(physicalIndex.Name), idList);
-            }
-            catch (RequestFailedException ex) when (ex.Status == 404 && definition.IndexPerCulture)
-            {
-                // A fallback index that does not exist yet holds nothing to delete.
+                try
+                {
+                    await DeleteAsync(indexAlias, azureSearchClientFactory.GetSearchIndexClient().GetSearchClient(target), idList);
+                }
+                catch (RequestFailedException ex) when (ex.Status == 404 && definition.IndexPerCulture)
+                {
+                    // A fallback index that does not exist yet holds nothing to delete.
+                }
             }
         }
     }
@@ -412,7 +434,8 @@ public class AzureSearchIndexer(
             {
                 try
                 {
-                    var response = await indexClient.GetIndexStatisticsAsync(physicalIndex.Name);
+                    var liveIndex = await serviceProvider.GetRequiredService<IndexSlots>().LiveAsync(physicalIndex.Name, definition);
+                    var response = await indexClient.GetIndexStatisticsAsync(liveIndex);
                     documentCount += response.Value.DocumentCount;
                 }
                 catch (RequestFailedException ex) when (ex.Status == 404 && definition.IndexPerCulture)

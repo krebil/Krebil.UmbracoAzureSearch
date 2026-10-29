@@ -1,5 +1,6 @@
 using Azure.Search.Documents;
 using Azure.Search.Documents.Indexes.Models;
+using Azure.Search.Documents.Models;
 using Umbraco.Cms.Search.Core.Services.ContentIndexing;
 using UmbracoAzureSearch.Models;
 
@@ -25,6 +26,46 @@ public sealed class AzureSearchIndexBuilder
     public AzureSearchIndexBuilder SuggestionFields(params string[] fields)
     {
         _options.Suggestions.Fields = fields;
+        return this;
+    }
+
+    /// <summary>The tags <c>SuggestAsync</c> puts around a match. Same as <c>Suggestions:HighlightPreTag</c> and <c>HighlightPostTag</c>.</summary>
+    public AzureSearchIndexBuilder SuggestionHighlight(string preTag, string postTag)
+    {
+        _options.Suggestions.HighlightPreTag = preTag;
+        _options.Suggestions.HighlightPostTag = postTag;
+        return this;
+    }
+
+    /// <summary>
+    /// Rebuilds into a second Azure index behind an Azure alias and swaps when the rebuild succeeds.
+    /// Same as <c>ZeroDowntimeRebuild: true</c>.
+    /// </summary>
+    public AzureSearchIndexBuilder ZeroDowntimeRebuild(Action<AzureSearchRebuildBuilder>? configure = null)
+    {
+        _options.ZeroDowntimeRebuild = true;
+        configure?.Invoke(new AzureSearchRebuildBuilder(_options));
+        return this;
+    }
+
+    /// <summary>A rebuild clears the cached umbracoIndexDocument rows. Same as <c>ClearDocumentCacheOnRebuild</c>.</summary>
+    public AzureSearchIndexBuilder ClearDocumentCacheOnRebuild(bool clear = true)
+    {
+        _options.ClearDocumentCacheOnRebuild = clear;
+        return this;
+    }
+
+    /// <summary>The scoring profile a query uses when it names none. Same as <c>DefaultScoringProfile</c>.</summary>
+    public AzureSearchIndexBuilder DefaultScoringProfile(string profileName)
+    {
+        _options.DefaultScoringProfile = profileName;
+        return this;
+    }
+
+    /// <summary>Turns on spell check per culture. Same as <c>SpellCheck</c>.</summary>
+    public AzureSearchIndexBuilder SpellCheck(Action<AzureSearchSpellCheckBuilder> configure)
+    {
+        configure(new AzureSearchSpellCheckBuilder(_options.SpellCheck));
         return this;
     }
 
@@ -145,12 +186,52 @@ public sealed class AzureSearchFieldBuilder
     /// </summary>
     public AzureSearchFieldBuilder PerCulture(bool value = true) => Set(() => _field.PerCulture = value);
 
-    /// <summary>The relevance boost of the field. Stored for scoring profiles; it has no effect yet.</summary>
+    /// <summary>The relevance boost of the field, in the generated umbraco-boosts scoring profile. Greater than 0.</summary>
     public AzureSearchFieldBuilder Boost(double boost) => Set(() => _field.Boost = boost);
 
     private AzureSearchFieldBuilder Set(Action set)
     {
         set();
+        return this;
+    }
+}
+
+/// <summary>Sets the zero-downtime rebuild of one index.</summary>
+public sealed class AzureSearchRebuildBuilder
+{
+    private readonly AzureSearchIndexOptions _options;
+
+    internal AzureSearchRebuildBuilder(AzureSearchIndexOptions options) => _options = options;
+
+    /// <summary>Skips the swap when the new index has fewer than this percentage of the old index's documents. 0 turns it off.</summary>
+    public AzureSearchRebuildBuilder MinimumDocumentPercent(int percent)
+    {
+        _options.RebuildMinimumDocumentPercent = percent;
+        return this;
+    }
+
+    /// <summary>The wait between the swap and the delete of the old index.</summary>
+    public AzureSearchRebuildBuilder DeleteDelay(TimeSpan delay)
+    {
+        _options.RebuildDeleteDelaySeconds = (int)delay.TotalSeconds;
+        return this;
+    }
+}
+
+/// <summary>Sets the spell check of one index.</summary>
+public sealed class AzureSearchSpellCheckBuilder
+{
+    private readonly SpellCheckOptions _spellCheck;
+
+    internal AzureSearchSpellCheckBuilder(SpellCheckOptions spellCheck) => _spellCheck = spellCheck;
+
+    /// <summary>
+    /// Corrects queries in a culture (for example <c>en</c> or <c>pt-BR</c>) with the lexicon speller of a query language.
+    /// Same as <c>SpellCheck:Cultures:&lt;culture&gt;</c>.
+    /// </summary>
+    public AzureSearchSpellCheckBuilder Culture(string culture, QueryLanguage queryLanguage)
+    {
+        _spellCheck.Cultures[culture] = queryLanguage.ToString();
         return this;
     }
 }

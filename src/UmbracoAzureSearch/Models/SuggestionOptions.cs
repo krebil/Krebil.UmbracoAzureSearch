@@ -14,4 +14,10 @@ public class SuggestionOptions
     /// The Umbraco fields whose texts feed suggestions. Null or empty uses all highest-relevance (R1) texts.
     /// </summary>
     public string[]? Fields { get; set; }
+
+    /// <summary>The tag <c>SuggestAsync</c> puts before a match in the suggestion text. <c>&lt;em&gt;</c> by default.</summary>
+    public string HighlightPreTag { get; set; } = "<em>";
+
+    /// <summary>The tag <c>SuggestAsync</c> puts after a match in the suggestion text. <c>&lt;/em&gt;</c> by default.</summary>
+    public string HighlightPostTag { get; set; } = "</em>";
 }

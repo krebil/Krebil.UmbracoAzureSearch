@@ -13,6 +13,36 @@ public class AzureSearchIndexOptions
     /// <summary>Suggestion settings, under <c>Indexes:&lt;alias&gt;:Suggestions</c>.</summary>
     public SuggestionOptions Suggestions { get; set; } = new();
 
+    /// <summary>
+    /// Rebuilds into a second Azure index behind an Azure alias and swaps when the rebuild succeeds, so searches keep
+    /// working during a rebuild. Off by default. Has no effect on serverless services.
+    /// </summary>
+    public bool ZeroDowntimeRebuild { get; set; }
+
+    /// <summary>
+    /// With <see cref="ZeroDowntimeRebuild"/>, the swap is skipped when the new index has fewer documents than this
+    /// percentage of the old index. 50 by default; 0 turns the check off.
+    /// </summary>
+    public int RebuildMinimumDocumentPercent { get; set; } = 50;
+
+    /// <summary>With <see cref="ZeroDowntimeRebuild"/>, the seconds between the swap and the delete of the old index. 10 by default.</summary>
+    public int RebuildDeleteDelaySeconds { get; set; } = 10;
+
+    /// <summary>
+    /// A rebuild clears the cached <c>umbracoIndexDocument</c> rows, so every item is read again from content. The cache is
+    /// shared by all indexes. Off by default.
+    /// </summary>
+    public bool ClearDocumentCacheOnRebuild { get; set; }
+
+    /// <summary>
+    /// The scoring profile a query uses when it names none. Unset: <c>umbraco-boosts</c> when a field has a boost,
+    /// otherwise the package's <c>relevanceBoost</c> profile.
+    /// </summary>
+    public string? DefaultScoringProfile { get; set; }
+
+    /// <summary>Spell check settings, under <c>Indexes:&lt;alias&gt;:SpellCheck</c>. Off by default.</summary>
+    public SpellCheckOptions SpellCheck { get; set; } = new();
+
     /// <summary>Analyzer settings, under <c>Indexes:&lt;alias&gt;:Analyzers</c>.</summary>
     public AnalyzerOptions Analyzers { get; set; } = new();
 

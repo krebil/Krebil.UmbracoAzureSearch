@@ -61,9 +61,11 @@ public class AzureSearchSearcher(
         int take = 10,
         int maxSuggestions = 0,
         SearchQueryType queryType = SearchQueryType.Simple,
-        SearchMode searchMode = SearchMode.All)
+        SearchMode searchMode = SearchMode.All,
+        string? scoringProfile = null,
+        IEnumerable<string>? scoringParameters = null)
         => SearchCoreAsync(indexAlias, query, filters, facets, sorters, culture, segment,
-            accessContext, skip, take, maxSuggestions, queryType, searchMode);
+            accessContext, skip, take, maxSuggestions, queryType, searchMode, scoringProfile, scoringParameters?.ToArray());
 
     // Explicit ISearcher implementation forwards to the core method with defaults.
     Task<SearchResult> ISearcher.SearchAsync(
@@ -79,7 +81,143 @@ public class AzureSearchSearcher(
         int take,
         int maxSuggestions)
         => SearchCoreAsync(indexAlias, query, filters, facets, sorters, culture, segment,
-            accessContext, skip, take, maxSuggestions, SearchQueryType.Simple, SearchMode.All);
+            accessContext, skip, take, maxSuggestions, SearchQueryType.Simple, SearchMode.All, null, null);
+
+    // Azure accepts 1 to 100 suggestions, and suggestion queries of 1 to 100 characters.
+    private const int MaxSuggestSize = 100;
+    private const int MaxSuggestQueryLength = 100;
+
+    // The value fields of an Umbraco field that select can return; the "_sort" copies and per-culture copies are left out.
+    private static readonly string[] SelectablePostfixes =
+    [
+        IndexConstants.FieldTypePostfix.Texts,
+        IndexConstants.FieldTypePostfix.Keywords,
+        IndexConstants.FieldTypePostfix.Integers,
+        IndexConstants.FieldTypePostfix.Decimals,
+        IndexConstants.FieldTypePostfix.DateTimeOffsets,
+    ];
+
+    public async Task<SuggestResult> SuggestAsync(
+        string indexAlias,
+        string query,
+        IEnumerable<Filter>? filters = null,
+        string? culture = null,
+        string? segment = null,
+        AccessContext? accessContext = null,
+        int top = 5,
+        bool fuzzy = false,
+        IEnumerable<string>? select = null)
+    {
+        var definition = new IndexDefinition(azureSearchIndexOptions.Get(indexAlias));
+        if (!definition.Options.Suggestions.Enabled)
+        {
+            throw new InvalidOperationException(
+                $"Suggestions are off for the index \"{indexAlias}\" ({UmbracoAzureSearchOptions.Name}:Indexes:{indexAlias}:Suggestions:Enabled), so it has no suggester.");
+        }
+
+        if (definition.IndexPerCulture && string.IsNullOrWhiteSpace(culture))
+        {
+            throw new InvalidOperationException(
+                $"The index \"{indexAlias}\" has one Azure index per culture (Analyzers:Mode IndexPerCulture), so a suggestion needs a culture.");
+        }
+
+        var suggestQuery = WhitespacePattern.Replace(query ?? string.Empty, " ").Trim();
+        if (suggestQuery.Length > MaxSuggestQueryLength)
+        {
+            suggestQuery = suggestQuery[..MaxSuggestQueryLength].TrimEnd();
+        }
+
+        if (suggestQuery.Length == 0)
+            return new SuggestResult([]);
+
+        var selectNames = (select ?? []).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        foreach (var name in selectNames)
+        {
+            ValidateFieldName(name);
+        }
+
+        var physicalIndex = serviceProvider.GetRequiredService<PhysicalIndexes>().ForCulture(indexAlias, definition, culture ?? string.Empty);
+        var searchClient = azureSearchClientFactory.GetSearchIndexClient().GetSearchClient(physicalIndex.Name);
+
+        // Each Umbraco field maps to the value fields the index has for it. An index without a field cannot select it.
+        var indexFields = selectNames.Length > 0
+            ? await serviceProvider.GetRequiredService<IndexFieldNames>().GetAsync(
+                await serviceProvider.GetRequiredService<IndexSlots>().LiveAsync(physicalIndex.Name, definition))
+            : [];
+        var selected = selectNames.ToDictionary(
+            name => name,
+            name => SelectablePostfixes.Select(postfix => $"{name}{postfix}").Where(indexFields.Contains).ToArray());
+
+        // Text filters are left out: the Suggest API rejects search.ismatchscoring, as Autocomplete does.
+        var filtersArray = (filters ?? []).Where(f => f is not TextFilter).ToArray();
+        var unknownFields = new HashSet<string>();
+        while (true)
+        {
+            // A filter on a field no document has finds nothing, as in SearchAsync; negated, it is dropped.
+            if (filtersArray.Any(f => !f.Negate && FilterFields(f).Any(unknownFields.Contains)))
+                return new SuggestResult([]);
+
+            var options = new SuggestOptions
+            {
+                Size = Math.Clamp(top, 1, MaxSuggestSize),
+                UseFuzzyMatching = fuzzy,
+                HighlightPreTag = definition.Options.Suggestions.HighlightPreTag,
+                HighlightPostTag = definition.Options.Suggestions.HighlightPostTag,
+                Filter = string.Join(" and ", BuildFilterClauses(
+                    BuildBaseFilterClauses(culture, segment, accessContext),
+                    filtersArray.Where(f => !FilterFields(f).Any(unknownFields.Contains)))),
+            };
+            options.Select.Add(IndexConstants.FieldNames.Key);
+            options.Select.Add(IndexConstants.FieldNames.ObjectType);
+            foreach (var field in selected.Values.SelectMany(fields => fields))
+            {
+                options.Select.Add(field);
+            }
+
+            // With suggestion copies, a mapped culture suggests from its copy plus the invariant copy.
+            if (definition.SuggestionsPerCulture && definition.CultureSuffix(culture) is { } suffix)
+            {
+                options.SearchFields.Add(IndexDefinition.CopyName(IndexConstants.FieldNames.Suggestion, suffix));
+                options.SearchFields.Add(IndexDefinition.CopyName(IndexConstants.FieldNames.Suggestion, IndexDefinition.InvariantSuffix));
+            }
+
+            Response<SuggestResults<SearchDocument>> response;
+            try
+            {
+                response = await searchClient.SuggestAsync<SearchDocument>(suggestQuery, IndexConstants.SuggesterName, options);
+            }
+            catch (RequestFailedException ex) when (ex.Status == 400
+                && UnknownFieldPattern.Match(ex.Message) is { Success: true } match
+                && filtersArray.Any(f => FilterFields(f).Contains(match.Groups[1].Value))
+                && unknownFields.Add(match.Groups[1].Value))
+            {
+                continue;
+            }
+
+            return new SuggestResult(response.Value.Results
+                .Select(result => ToSuggestedDocument(result.Document, result.Text, selected))
+                .OfType<SuggestedDocument>()
+                .ToArray());
+        }
+    }
+
+    private static SuggestedDocument? ToSuggestedDocument(SearchDocument document, string text, Dictionary<string, string[]> selected)
+    {
+        if (!document.TryGetValue(IndexConstants.FieldNames.Key, out var keyValue)
+            || !Guid.TryParse(keyValue?.ToString(), out var key)
+            || !document.TryGetValue(IndexConstants.FieldNames.ObjectType, out var objectTypeValue)
+            || !Enum.TryParse<UmbracoObjectTypes>(objectTypeValue?.ToString(), out var objectType))
+        {
+            return null;
+        }
+
+        var fields = selected.ToDictionary(
+            entry => entry.Key,
+            entry => entry.Value
+                .Select(field => document.TryGetValue(field, out var value) ? value : null)
+                .FirstOrDefault(value => value is not null and not object[] { Length: 0 }));
+        return new SuggestedDocument(key, objectType, text, fields);
+    }
 
     // Azure has no field for a value no document ever had, where Examine has a field with no values. A clause on one is
     // a 400 naming the field; the search is repeated without it, answered as Examine would: a filter on it finds nothing
@@ -100,7 +238,9 @@ public class AzureSearchSearcher(
         int take,
         int maxSuggestions,
         SearchQueryType queryType,
-        SearchMode searchMode)
+        SearchMode searchMode,
+        string? scoringProfile,
+        string[]? scoringParameters)
     {
         var unknownFields = new HashSet<string>();
         while (true)
@@ -108,7 +248,7 @@ public class AzureSearchSearcher(
             try
             {
                 return await SearchOnceAsync(indexAlias, query, filters, facets, sorters, culture, segment, accessContext,
-                    skip, take, maxSuggestions, queryType, searchMode, unknownFields);
+                    skip, take, maxSuggestions, queryType, searchMode, scoringProfile, scoringParameters, unknownFields);
             }
             catch (Azure.RequestFailedException ex) when (ex.Status == 400
                 && UnknownFieldPattern.Match(ex.Message) is { Success: true } match
@@ -116,6 +256,16 @@ public class AzureSearchSearcher(
             {
                 // Repeated without the field. An error about a field the search did not ask for comes back unchanged
                 // the second time and is not swallowed.
+            }
+            catch (Azure.RequestFailedException ex) when (ex.Status == 400
+                && (ex.Message.Contains("speller", StringComparison.OrdinalIgnoreCase) || ex.Message.Contains("queryLanguage", StringComparison.OrdinalIgnoreCase))
+                && SpellCheckIndexName(indexAlias, culture) is { } indexName
+                && serviceProvider.GetRequiredService<SpellerState>().Reject(indexName))
+            {
+                // A service without the speller (Free tier, for example). The search runs again without spell check.
+                logger.LogWarning(
+                    "The search service rejected spell check for index {IndexAlias} ({Message}). Searches on it run without spell check until the application restarts.",
+                    indexAlias, ex.Message);
             }
         }
     }
@@ -134,6 +284,8 @@ public class AzureSearchSearcher(
         int maxSuggestions,
         SearchQueryType queryType,
         SearchMode searchMode,
+        string? scoringProfile,
+        string[]? scoringParameters,
         ISet<string> unknownFields)
     {
         // IndexPerCulture: the index of the request culture, or the fallback index for a culture outside the map.
@@ -167,6 +319,18 @@ public class AzureSearchSearcher(
             ? "*"
             : query.Contains(' ') ? query : $"{query}*";
 
+        // Spell check: the lexicon speller corrects the query terms of a mapped culture. Azure does not correct prefix
+        // (one-word, "*") queries, and returns no corrected text.
+        if (definition.QueryLanguage(culture) is { } queryLanguage
+            && !serviceProvider.GetRequiredService<SpellerState>().IsRejected(physicalIndex.Name))
+        {
+            searchOptions.SemanticSearch = new SemanticSearchOptions
+            {
+                QuerySpeller = QuerySpellerType.Lexicon,
+                QueryLanguage = queryLanguage,
+            };
+        }
+
         // FieldPerCulture: search the copies of the request culture plus the invariant copies, analyzed per culture.
         var searchFields = SearchFields(definition, culture);
         foreach (var field in searchFields)
@@ -177,37 +341,7 @@ public class AzureSearchSearcher(
         // Build base filter clauses (culture/segment)
         // Escaped like every other value: an unescaped quote could end the clause and turn the whole filter, the
         // access clause included, into something that matches everything.
-        var baseFilterClauses = new List<string>();
-
-        // Culture filter
-        if (!string.IsNullOrWhiteSpace(culture))
-        {
-            var cultureValue = EscapeODataString(culture.IndexCulture());
-            baseFilterClauses.Add(
-                $"({IndexConstants.FieldNames.Culture} eq '{cultureValue}' or {IndexConstants.FieldNames.Culture} eq '{IndexConstants.Variation.InvariantCulture}')");
-        }
-        else
-        {
-            baseFilterClauses.Add($"{IndexConstants.FieldNames.Culture} eq '{IndexConstants.Variation.InvariantCulture}'");
-        }
-
-        // Segment filter
-        if (!string.IsNullOrWhiteSpace(segment))
-        {
-            var segmentValue = EscapeODataString(segment.IndexSegment());
-            baseFilterClauses.Add(
-                $"({IndexConstants.FieldNames.Segment} eq '{segmentValue}' or {IndexConstants.FieldNames.Segment} eq '{IndexConstants.Variation.DefaultSegment}')");
-        }
-        else
-        {
-            baseFilterClauses.Add($"{IndexConstants.FieldNames.Segment} eq '{IndexConstants.Variation.DefaultSegment}'");
-        }
-
-        var accessClause = BuildAccessClause(accessContext);
-        if (accessClause is not null)
-        {
-            baseFilterClauses.Add(accessClause);
-        }
+        var baseFilterClauses = BuildBaseFilterClauses(culture, segment, accessContext);
 
         var filtersArray = filters?.ToArray() ?? [];
         if (filtersArray.Any(f => !f.Negate && FilterFields(f).Any(unknownFields.Contains)))
@@ -310,6 +444,9 @@ public class AzureSearchSearcher(
                 facetSearchOptions.SearchFields.Add(field);
             }
 
+            // The same search text, so the same spell check, keeps the facet counts in line with the results.
+            facetSearchOptions.SemanticSearch = searchOptions.SemanticSearch;
+
             foreach (var expr in sameFieldFacetExpressions)
             {
                 facetSearchOptions.Facets.Add(expr);
@@ -319,6 +456,18 @@ public class AzureSearchSearcher(
             {
                 facetSearchOptions.Filter = string.Join(" and ", facetFilterClauses);
             }
+        }
+
+        // A scoring profile for this query; without one, Azure uses the default profile of the index. The parameters
+        // feed the functions of whichever profile applies.
+        if (!string.IsNullOrWhiteSpace(scoringProfile))
+        {
+            searchOptions.ScoringProfile = scoringProfile;
+        }
+
+        foreach (var parameter in scoringParameters ?? [])
+        {
+            searchOptions.ScoringParameters.Add(parameter);
         }
 
         // The consumer's changes run last, on every Azure query of the index. The package does not validate them.
@@ -470,6 +619,53 @@ public class AzureSearchSearcher(
         }
 
         return IndexSchema.Aggregates.Select(a => a.Name).ToArray();
+    }
+
+    // Culture plus invariant, segment plus default, and the access clause: the rules every query on the index keeps.
+    private static List<string> BuildBaseFilterClauses(string? culture, string? segment, AccessContext? accessContext)
+    {
+        var baseFilterClauses = new List<string>();
+
+        // Culture filter
+        if (!string.IsNullOrWhiteSpace(culture))
+        {
+            var cultureValue = EscapeODataString(culture.IndexCulture());
+            baseFilterClauses.Add(
+                $"({IndexConstants.FieldNames.Culture} eq '{cultureValue}' or {IndexConstants.FieldNames.Culture} eq '{IndexConstants.Variation.InvariantCulture}')");
+        }
+        else
+        {
+            baseFilterClauses.Add($"{IndexConstants.FieldNames.Culture} eq '{IndexConstants.Variation.InvariantCulture}'");
+        }
+
+        // Segment filter
+        if (!string.IsNullOrWhiteSpace(segment))
+        {
+            var segmentValue = EscapeODataString(segment.IndexSegment());
+            baseFilterClauses.Add(
+                $"({IndexConstants.FieldNames.Segment} eq '{segmentValue}' or {IndexConstants.FieldNames.Segment} eq '{IndexConstants.Variation.DefaultSegment}')");
+        }
+        else
+        {
+            baseFilterClauses.Add($"{IndexConstants.FieldNames.Segment} eq '{IndexConstants.Variation.DefaultSegment}'");
+        }
+
+        var accessClause = BuildAccessClause(accessContext);
+        if (accessClause is not null)
+        {
+            baseFilterClauses.Add(accessClause);
+        }
+
+        return baseFilterClauses;
+    }
+
+    // The Azure index of a search that spell check applies to, or null when the culture has no spell check.
+    private string? SpellCheckIndexName(string indexAlias, string? culture)
+    {
+        var definition = new IndexDefinition(azureSearchIndexOptions.Get(indexAlias));
+        return definition.QueryLanguage(culture) is null
+            ? null
+            : serviceProvider.GetRequiredService<PhysicalIndexes>().ForCulture(indexAlias, definition, culture ?? string.Empty).Name;
     }
 
     private static bool IsMissingSuggester(RequestFailedException ex)
