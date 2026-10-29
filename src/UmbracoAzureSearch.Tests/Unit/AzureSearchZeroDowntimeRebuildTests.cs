@@ -109,6 +109,8 @@ public class AzureSearchZeroDowntimeRebuildTests
 
         await services.GetRequiredService<IIndexer>().ResetAsync(IndexAlias);
         await WriteAsync(services);
+        // The write looks up removed variations in both slots; only the search below is checked.
+        azure.Searches.Clear();
         await services.GetRequiredService<IAzureSearchSearcher>().SearchAsync(IndexAlias, query: "red");
 
         Assert.Multiple(() =>
@@ -119,6 +121,22 @@ public class AzureSearchZeroDowntimeRebuildTests
             Assert.That(azure.Searches, Is.EqualTo(new[] { Name }), "Searches use the alias.");
             Assert.That(Messages(service, LogLevel.Information), Has.One.Contains("Rebuild started").And.Contains(SlotB).And.Contains(SlotA));
         });
+    }
+
+    // The cleanup of a culture the content no longer has must reach the new slot too, or the document returns at the swap.
+    [Test]
+    public async Task ARebuildCleansUpRemovedCulturesInBothSlots()
+    {
+        var (service, azure) = Service(index => ZeroDowntime(index.Cultures("da-DK")));
+        azure.Indexes.Add(SlotA);
+        azure.Aliases[Name] = SlotA;
+        var services = service.CreateServices();
+
+        await services.GetRequiredService<IIndexer>().ResetAsync(IndexAlias);
+        await services.GetRequiredService<IIndexer>().AddOrUpdateAsync(IndexAlias, Guid.NewGuid(), UmbracoObjectTypes.Document,
+            [new Variation("en-US", null)], [new IndexField("title", new IndexValue { TextsR1 = ["Red boat"] }, "en-US", null)], null);
+
+        Assert.That(azure.Searches, Is.EquivalentTo(new[] { SlotA, SlotB }));
     }
 
     [Test]
