@@ -57,6 +57,7 @@ Content types, cultures, per-index indexers and the `ConfigureIndex` and `Config
 | Suggestions on or off | `Suggestions:Enabled` | `.Suggestions(bool)` | `true` | Yes, to fill suggestions after turning them on | [Suggestions](suggestions.md) |
 | Suggestion fields | `Suggestions:Fields` | `.SuggestionFields(params string[])` | Highest-relevance texts | Yes | [Suggestions](suggestions.md) |
 | Suggestion highlight tags | `Suggestions:HighlightPreTag`, `Suggestions:HighlightPostTag` | `.SuggestionHighlight(pre, post)` | `<em>`, `</em>` | No | [Suggestions](suggestions.md#highlights) |
+| Spell check per culture | `SpellCheck:Cultures:<culture>` | `.SpellCheck(s => s.Culture("en", ...))` | Off | No | [Spell check](spell-check.md) |
 | Automatic fields | `AutomaticFields` | `.AutomaticFields(bool)` | `true` | Yes, to turn it off on an existing index | [Index definition](index-definition.md) |
 | Opted-in fields and attributes | `Fields:<field>` | `.Field("<field>", f => ...)` | None | Yes, to change an attribute of an existing field | [Index definition](index-definition.md) |
 | Content types | Code only | `.ContentTypes(params string[])` | Every content type | Yes | [Index definition](index-definition.md) |

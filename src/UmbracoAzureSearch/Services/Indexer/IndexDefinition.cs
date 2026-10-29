@@ -89,6 +89,12 @@ internal sealed class IndexDefinition(AzureSearchIndexOptions options, string? t
         yield return (InvariantSuffix, Options.Analyzers.Invariant);
     }
 
+    /// <summary>The query language of the speller for a culture, or null when the culture has no spell check.</summary>
+    public string? QueryLanguage(string? culture)
+        => culture is not null && MatchKey(Options.SpellCheck.Cultures.Keys, culture) is { } key
+            ? Options.SpellCheck.Cultures[key]
+            : null;
+
     /// <summary>The analyzer of the copies with this suffix.</summary>
     public string? CopyAnalyzer(string suffix)
         => Copies().Where(c => c.Suffix == suffix).Select(c => c.Analyzer).FirstOrDefault();

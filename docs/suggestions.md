@@ -180,7 +180,7 @@ Fuzzy compared to spell check:
 |---|---|---|
 | How | Accepts index terms within one edit of the typed term | Rewrites the query with a dictionary (the Azure lexicon speller) |
 | Where | Document suggestions | Full search only |
-| Languages | Every language | Only the languages the speller supports |
+| Languages | Every language | English, Spanish, French, German and Dutch. See [Spell check](spell-check.md). |
 
 ### Gotchas
 
