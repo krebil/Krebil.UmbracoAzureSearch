@@ -75,7 +75,12 @@ With `AutomaticFields` on (the default), the package writes every field the Umbr
 
 An opt-in changes the attributes of an automatic field. An attribute that the opt-in does not set keeps its automatic value. For example, `"summary": { "Searchable": false }` takes `summary` out of the free-text query, and `summary` stays sortable.
 
-With `AutomaticFields` off, a field is in the index only when it is opted in. An attribute that the opt-in does not set is off. This applies to every indexer, including the Delivery API `IContentIndexHandler` fields.
+With `AutomaticFields` off, a field is in the index only when it is opted in. An attribute that the opt-in does not set is off. This applies to every indexer, except for these fields, which always count as opted in with the automatic attributes:
+
+- The Umbraco system fields (see below).
+- The fields of the Delivery API index handlers (`IContentIndexHandler`). The package reads them from the registered handlers, so the Delivery API filters and sorts keep working. An opt-in of such a field changes the attributes it sets, and the other attributes keep their automatic value.
+
+Their texts also feed the free-text query on all fields (`allTexts`).
 
 The Umbraco system fields (`Umb_Id`, `Umb_ParentId`, `Umb_PathIds`, `Umb_ContentTypeId`, `Umb_Name`, `Umb_CreateDate`, `Umb_UpdateDate`, `Umb_Level`, `Umb_SortOrder`, `Umb_ObjectType`, `Umb_Tags`) are always written. Deletes, the backoffice and the Delivery API use them.
 
@@ -158,6 +163,7 @@ The package counts the fields at startup and stops startup when the count is ove
 | Each searchable field (automatic fields off) | 4 |
 | Each filterable or facetable field (automatic fields off) | 1 |
 | Each sortable field (automatic fields off) | 1 |
+| Each Delivery API index handler field that is not opted in (automatic fields off) | 6 for a text, 2 for other values |
 
 The count is an upper limit for a field with one value type. A searchable and filterable text field counts 5 and uses 4.
 
