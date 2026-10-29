@@ -2,6 +2,8 @@ using System.Reflection;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using UmbracoAzureSearch.Models;
+using Microsoft.Extensions.Options;
 using Umbraco.Cms.Core.Models;
 using Umbraco.Cms.Search.Core.Models.Indexing;
 using Umbraco.Cms.Search.Core.Services;
@@ -99,6 +101,86 @@ public class AzureSearchIndexDefinitionTests
             Assert.That(Properties(document), Does.Contain("title_texts").And.Contains("Umb_PathIds_keywords"));
             Assert.That(Properties(document), Has.None.StartsWith("body_").And.None.StartsWith("deliveryApiField_"));
             Assert.That(AllTexts(document), Is.EqualTo(new[] { "Red boat" }), "Fields outside the index do not feed the free-text query.");
+        });
+    }
+
+    // The Delivery API filters and sorts on the fields of its index handlers, so they count as opted in.
+    [Test]
+    public async Task WritesIndexHandlerFieldsWithAutomaticFieldsOff()
+    {
+        var service = Service(index => index.AutomaticFields(false));
+        WithIndexHandler(service, new Umbraco.Cms.Core.DeliveryApi.IndexField
+        {
+            FieldName = "universe", FieldType = Umbraco.Cms.Core.DeliveryApi.FieldType.StringRaw, VariesByCulture = false,
+        });
+
+        await IndexAsync(service, Invariant, Keywords("universe", "histoire"), Keywords("other", "x"));
+
+        var document = Documents(service).Single();
+        var fields = SchemaFields(service);
+        Assert.Multiple(() =>
+        {
+            Assert.That(Properties(document), Does.Contain("universe_keywords"));
+            Assert.That(Properties(document), Has.None.StartsWith("other_"));
+            Assert.That(Attribute(fields["universe_keywords"], "filterable"), Is.True);
+            Assert.That(Attribute(fields["universe_keywords_sort"], "sortable"), Is.True);
+        });
+    }
+
+    // The free-text query on all fields keeps the content name and the index handler texts when automatic fields are off.
+    [Test]
+    public async Task SystemAndIndexHandlerTextsFeedAllTextsWithAutomaticFieldsOff()
+    {
+        var service = Service(index => index.AutomaticFields(false));
+        WithIndexHandler(service, new Umbraco.Cms.Core.DeliveryApi.IndexField
+        {
+            FieldName = "headline", FieldType = Umbraco.Cms.Core.DeliveryApi.FieldType.StringAnalyzed, VariesByCulture = false,
+        });
+
+        await IndexAsync(service, Invariant,
+            Text(Umbraco.Cms.Search.Core.Constants.FieldNames.Name, "Red boat"),
+            Text("headline", "Sails at dawn"),
+            Text("body", "hidden text"));
+
+        Assert.That(AllTexts(Documents(service).Single()), Is.EquivalentTo(new[] { "Red boat", "Sails at dawn" }));
+    }
+
+    // The Delivery API indexer writes fields for documents only, so media and member indexes do not get them.
+    [Test]
+    public void OnlyIndexesThatHoldDocumentsGetIndexHandlerFields()
+    {
+        var service = Service();
+        WithIndexHandler(service, new Umbraco.Cms.Core.DeliveryApi.IndexField
+        {
+            FieldName = "universe", FieldType = Umbraco.Cms.Core.DeliveryApi.FieldType.StringRaw, VariesByCulture = false,
+        });
+
+        var options = service.CreateServices().GetRequiredService<IOptionsMonitor<AzureSearchIndexOptions>>();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.Get(IndexAlias).IndexHandlerFields.Keys, Is.EqualTo(new[] { "universe" }));
+            Assert.That(options.Get(Umbraco.Cms.Search.Core.Constants.IndexAliases.DraftMembers).IndexHandlerFields, Is.Empty);
+            Assert.That(options.Get(Umbraco.Cms.Search.Core.Constants.IndexAliases.DraftMedia).IndexHandlerFields, Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task AnOptInChangesTheAttributesOfAnIndexHandlerField()
+    {
+        var service = Service(index => index.AutomaticFields(false).Field("universe", f => f.Facetable(false)));
+        WithIndexHandler(service, new Umbraco.Cms.Core.DeliveryApi.IndexField
+        {
+            FieldName = "universe", FieldType = Umbraco.Cms.Core.DeliveryApi.FieldType.StringRaw, VariesByCulture = false,
+        });
+
+        await IndexAsync(service, Invariant, Keywords("universe", "histoire"));
+
+        var fields = SchemaFields(service);
+        Assert.Multiple(() =>
+        {
+            Assert.That(Attribute(fields["universe_keywords"], "filterable"), Is.True, "Unset attributes keep the automatic value.");
+            Assert.That(Attribute(fields["universe_keywords"], "facetable"), Is.False);
         });
     }
 
@@ -298,6 +380,21 @@ public class AzureSearchIndexDefinitionTests
     }
 
     [Test]
+    public void CountsIndexHandlerFieldsInTheFieldBudget()
+    {
+        var service = Service(index => index.AutomaticFields(false));
+        WithIndexHandler(service,
+            new Umbraco.Cms.Core.DeliveryApi.IndexField { FieldName = "universe", FieldType = Umbraco.Cms.Core.DeliveryApi.FieldType.StringRaw, VariesByCulture = false },
+            new Umbraco.Cms.Core.DeliveryApi.IndexField { FieldName = "headline", FieldType = Umbraco.Cms.Core.DeliveryApi.FieldType.StringSortable, VariesByCulture = true });
+        service.Settings["UmbracoAzureSearch:MaxFieldsPerIndex"] = "40";
+
+        var exception = Assert.ThrowsAsync<InvalidOperationException>(() => StartAsync(service));
+
+        // 10 base fields, 25 system fields, 1 suggestion field, 2 for universe and 6 for headline.
+        Assert.That(exception!.Message, Does.Contain("needs 44 Azure fields, but the service allows 40"));
+    }
+
+    [Test]
     public void AcceptsAValidDefinition()
     {
         var service = Service(index => index
@@ -313,6 +410,17 @@ public class AzureSearchIndexDefinitionTests
         {
             await hostedService.StartAsync(CancellationToken.None);
         }
+    }
+
+    private static void WithIndexHandler(FakeSearchService service, params Umbraco.Cms.Core.DeliveryApi.IndexField[] fields)
+        => service.ConfigureServices += services => services.AddSingleton(
+            new Umbraco.Cms.Core.DeliveryApi.ContentIndexHandlerCollection(() => [new FakeIndexHandler(fields)]));
+
+    private sealed class FakeIndexHandler(Umbraco.Cms.Core.DeliveryApi.IndexField[] fields) : Umbraco.Cms.Core.DeliveryApi.IContentIndexHandler
+    {
+        public IEnumerable<Umbraco.Cms.Core.DeliveryApi.IndexFieldValue> GetFieldValues(IContent content, string? culture) => [];
+
+        public IEnumerable<Umbraco.Cms.Core.DeliveryApi.IndexField> GetFields() => fields;
     }
 
     private sealed class FakeContentSource : IUmbracoContentSource
