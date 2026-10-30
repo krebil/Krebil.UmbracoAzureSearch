@@ -81,7 +81,8 @@ During the rebuild, Umbraco Search deletes each item without a published variati
 A delete of the rebuild sends no request to an index that the rebuild emptied. This applies to every rebuild:
 
 - A zero-downtime rebuild fills a new, empty index.
-- A rebuild without zero-downtime rebuild, and a rebuild on a serverless service, deletes the index and creates it again.
+- A rebuild without zero-downtime rebuild deletes the index and creates it again.
+- A rebuild on a serverless service also deletes the index and creates it again.
 
 An index that the rebuild emptied holds nothing that the search could find:
 
@@ -98,7 +99,7 @@ These deletes search and delete as before:
 
 The package also skips a delete from code inside the rebuild flow, for example a `ContentIndexingNotification` handler. A document that the rebuild already wrote stays in the index. To keep an item out of the rebuild, cancel its `ContentIndexingNotification`.
 
-Your code can also call `IIndexer` in its own flow during the rebuild. If it writes an item, and the rebuild then deletes the same item, the document stays in the index until the next write or delete of the item. Umbraco Search runs content changes after the rebuild, so only such direct calls cause this.
+Your code can also call `IIndexer` in its own flow during the rebuild. If it writes an item, and the rebuild then deletes the same item, the document stays in the index until the next write or delete of the item. Umbraco Search runs content changes after the rebuild. So only such direct calls cause this.
 
 ## Batch size
 

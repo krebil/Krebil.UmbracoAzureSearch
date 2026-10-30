@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Umbraco.Cms.Search.Core.Services;
 using UmbracoAzureSearch.Configuration;
+using UmbracoAzureSearch.Extensions;
 using static UmbracoAzureSearch.Tests.Unit.AzureSearchRebuildWriteTests;
 
 namespace UmbracoAzureSearch.Tests.Unit;
@@ -168,6 +169,33 @@ public class AzureSearchRebuildDeleteTests
         await indexer.DeleteAsync(IndexAlias, [Parent]);
 
         Assert.That(service.RequestCount, Is.Zero);
+    }
+
+    // A serverless service has no aliases, so the rebuild is a plain rebuild also with ZeroDowntimeRebuild on.
+    [Test]
+    public async Task AServerlessRebuildDeleteSendsNoRequest()
+    {
+        var azure = new FakeAzureIndexes();
+        var service = new FakeSearchService
+        {
+            Respond = azure.Respond,
+            ConfigureServices = services => services.ConfigureAzureSearchIndex(IndexAlias, index => index.ZeroDowntimeRebuild()),
+        };
+        service.Settings["UmbracoAzureSearch:Serverless"] = "true";
+        var services = service.CreateServices();
+        azure.AddIndex(Name);
+        var indexer = services.GetRequiredService<IIndexer>();
+
+        await indexer.ResetAsync(IndexAlias);
+        await WriteAsync(services, Guid.NewGuid());
+        service.ClearRequests();
+        await indexer.DeleteAsync(IndexAlias, [Parent]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(service.RequestCount, Is.Zero);
+            Assert.That(azure.Aliases, Is.Empty);
+        });
     }
 
     // An unpublish during a plain rebuild runs in another flow. It searches the index and deletes the descendants.
