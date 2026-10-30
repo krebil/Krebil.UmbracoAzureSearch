@@ -395,8 +395,20 @@ public class AzureSearchIndexer(
         {
             await FlushRebuildBatchAsync(rebuildWrites, indexAlias);
         }
+
+        var slots = serviceProvider.GetRequiredService<IndexSlots>();
         foreach (var physicalIndex in await serviceProvider.GetRequiredService<PhysicalIndexes>().AllAsync(indexAlias, definition))
         {
+            // Zero-downtime rebuild: Umbraco Search deletes an item of the rebuild when it has no published variation. It
+            // wrote no document of that item and skips its descendants. The new slot only holds what the rebuild wrote, so
+            // it holds no document of the item or its descendants, and none waits in the batch. The search would find
+            // nothing and cost a request per item.
+            if (rebuildWrite && slots.NewSlot(physicalIndex.Name, definition) is { } newSlot)
+            {
+                logger.LogDebug("Skipping the delete of {Ids} from {IndexAlias} ({IndexName}): the rebuild wrote no document of them", idList, indexAlias, newSlot);
+                continue;
+            }
+
             foreach (var (target, _) in await TargetsAsync(physicalIndex.Name, definition, rebuildWrite))
             {
                 try

@@ -160,23 +160,4 @@ public class AzureSearchRebuildWriteTests
 
         Assert.That(azure.Documents[Name], Has.Count.EqualTo(1));
     }
-
-    // The rebuild deletes content that has no published variation. It only affects the new slot.
-    [Test]
-    public async Task RebuildDeletesGoToTheNewSlotOnly()
-    {
-        var (service, _, services) = Create();
-
-        await DeleteInRebuildAsync(services);
-
-        Assert.That(service.Requests.Where(r => r.Path.Contains("search.post.search")).Select(r => r.Path),
-            Has.All.Contains(SlotB).And.Not.Empty);
-    }
-
-    private static async Task DeleteInRebuildAsync(IServiceProvider services)
-    {
-        var indexer = services.GetRequiredService<IIndexer>();
-        await indexer.ResetAsync(IndexAlias);
-        await indexer.DeleteAsync(IndexAlias, [Guid.NewGuid()]);
-    }
 }
