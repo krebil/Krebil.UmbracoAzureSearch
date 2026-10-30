@@ -17,9 +17,11 @@ internal sealed class RebuildWrites
     private readonly ConcurrentDictionary<string, RebuildFlow> _active = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Starts the rebuild of an index in the current flow. Call it outside an async method.</summary>
-    public RebuildFlow Begin(string indexAlias)
+    /// <param name="indexAlias">The Umbraco index.</param>
+    /// <param name="batchSize">The documents per request; 1 sends each item at once.</param>
+    public RebuildFlow Begin(string indexAlias, int batchSize = 1)
     {
-        var flow = new RebuildFlow(indexAlias);
+        var flow = new RebuildFlow(indexAlias, batchSize > 1 ? new RebuildBatch(batchSize) : null);
         _active[indexAlias] = flow;
         Flow.Value = flow;
         return flow;
@@ -34,12 +36,18 @@ internal sealed class RebuildWrites
             ? flow
             : null;
 
+    /// <summary>The rebuild that runs for an index, whatever the flow, or null.</summary>
+    public RebuildFlow? Active(string indexAlias) => _active.GetValueOrDefault(indexAlias);
+
     /// <summary>Ends the rebuild of an index and returns it, or null when none runs.</summary>
     public RebuildFlow? End(string indexAlias) => _active.TryRemove(indexAlias, out var flow) ? flow : null;
 }
 
 /// <summary>One rebuild of an index.</summary>
-internal sealed class RebuildFlow(string indexAlias)
+internal sealed class RebuildFlow(string indexAlias, RebuildBatch? batch)
 {
     public string IndexAlias { get; } = indexAlias;
+
+    /// <summary>The batch of the rebuild writes, or null when each item is sent at once.</summary>
+    public RebuildBatch? Batch { get; } = batch;
 }

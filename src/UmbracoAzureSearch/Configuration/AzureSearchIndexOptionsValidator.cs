@@ -19,6 +19,9 @@ internal sealed class AzureSearchIndexOptionsValidator(IOptions<UmbracoAzureSear
     // The Umbraco system fields: ten keyword, number or date fields with a sortable copy, and Umb_Name with four text fields and a sortable copy.
     internal const int SystemFieldCount = 25;
 
+    // Azure takes at most 1000 documents per index request.
+    internal const int MaxBatchSize = 1000;
+
     private static readonly HashSet<string> BackofficeIndexes = new(StringComparer.OrdinalIgnoreCase)
     {
         Umbraco.Cms.Search.Core.Constants.IndexAliases.DraftContent,
@@ -71,6 +74,11 @@ internal sealed class AzureSearchIndexOptionsValidator(IOptions<UmbracoAzureSear
         if (options.RebuildMinimumDocumentPercent is < 0 or > 100)
         {
             failures.Add($"RebuildMinimumDocumentPercent is {options.RebuildMinimumDocumentPercent}. Use 0 to 100; 0 turns the count check off.");
+        }
+
+        if (options.RebuildBatchSize is < 1 or > MaxBatchSize)
+        {
+            failures.Add($"RebuildBatchSize is {options.RebuildBatchSize}. Use 1 to {MaxBatchSize}; 1 sends each item at once.");
         }
 
         if (options.RebuildDeleteDelaySeconds < 0)
