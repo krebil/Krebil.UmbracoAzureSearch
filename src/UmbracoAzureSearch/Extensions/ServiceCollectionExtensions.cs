@@ -57,6 +57,7 @@ public static class ServiceCollectionExtensions
             .AddSingleton<IndexSlots>()
             .AddSingleton<IndexSchemaUpdates>()
             .AddSingleton<RebuildWrites>()
+            .AddSingleton<DocumentWriter>()
             .AddSingleton<ScoringProfileSources>()
             .AddSingleton<IValidateOptions<AzureSearchIndexOptions>, AzureSearchIndexOptionsValidator>()
             .AddSingleton(sp => new AzureSearchIndexConfigurationSources(
