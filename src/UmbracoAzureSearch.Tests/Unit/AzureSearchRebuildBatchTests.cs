@@ -106,6 +106,38 @@ public class AzureSearchRebuildBatchTests
         Assert.That(azure.Uploads[SlotB], Is.EqualTo(new[] { 1 }));
     }
 
+    // The rebuild deletes items without a published variation. Their descendants come later, so the batch can wait.
+    [Test]
+    public async Task ADeleteOfTheRebuildKeepsTheBatch()
+    {
+        var (_, azure, services) = CreateBatched(10);
+
+        await RebuildAsync(services, Items(2), () => services.GetRequiredService<IIndexer>().DeleteAsync(IndexAlias, [Guid.NewGuid()]));
+
+        Assert.That(azure.Uploads.ContainsKey(SlotB), Is.False);
+    }
+
+    // A rebuild that throws publishes no completed notification, so its batch stays. A later publish must not fail on it.
+    [Test]
+    public async Task ABatchThatCannotBeSentDoesNotFailAPublish()
+    {
+        var (service, azure, services) = CreateBatched(10);
+        var publish = Guid.NewGuid();
+        await RebuildAsync(services, Items(2));
+        azure.OnUpload = (_, ids) => ids.Length == 2
+            ? FakeAzureIndexes.Error(HttpStatusCode.InternalServerError, "", "Internal error")
+            : null;
+
+        await OutsideTheRebuild(() => WriteAsync(services, publish));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(azure.Documents[SlotA], Is.EqualTo(new[] { DocumentId(publish) }));
+            Assert.That(azure.Documents[SlotB], Is.EqualTo(new[] { DocumentId(publish) }));
+            Assert.That(service.Logs.Where(l => l.Level == LogLevel.Warning).Select(l => l.Message), Has.Some.Contains("Could not send the waiting rebuild documents"));
+        });
+    }
+
     // The count check compares the documents of the old and the new index, so the last batch must be in the new index.
     [Test]
     public async Task TheCountCheckSeesTheLastBatch()
