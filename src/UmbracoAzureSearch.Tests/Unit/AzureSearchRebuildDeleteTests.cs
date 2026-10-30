@@ -1,21 +1,17 @@
 using Microsoft.Extensions.DependencyInjection;
-using Umbraco.Cms.Search.Core.Extensions;
 using Umbraco.Cms.Search.Core.Services;
 using UmbracoAzureSearch.Configuration;
 using static UmbracoAzureSearch.Tests.Unit.AzureSearchRebuildWriteTests;
 
 namespace UmbracoAzureSearch.Tests.Unit;
 
-// Umbraco Search deletes each item without a published variation during a rebuild, and skips its descendants. A delete
-// searches the index for the documents of the item and its descendants (Umb_PathIds). During a zero-downtime rebuild the
-// new slot only holds what the rebuild wrote, so such a search finds nothing: the rebuild delete sends no request.
+// A delete searches the index for the documents of the item and its descendants (Umb_PathIds). A delete of a zero-downtime
+// rebuild sends no request: the search would find nothing (see "Deletes of the rebuild" in zero-downtime-rebuild.md).
 [TestFixture]
 public class AzureSearchRebuildDeleteTests
 {
     private static readonly Guid Parent = Guid.NewGuid();
     private static readonly Guid Child = Guid.NewGuid();
-
-    private static string DocumentId(Guid id) => $"{id.AsKeyword()}_inv_def";
 
     // The fake service does not filter. A search by Umb_PathIds finds the parent and the child, as Azure would in an index
     // that holds both.
@@ -34,44 +30,22 @@ public class AzureSearchRebuildDeleteTests
         return (service, azure, services);
     }
 
-    private static string? IndexName(string path)
-    {
-        const string prefix = "/indexes('";
-        var start = path.IndexOf(prefix, StringComparison.Ordinal);
-        return start < 0 ? null : path[(start + prefix.Length)..path.IndexOf("')", start, StringComparison.Ordinal)];
-    }
-
     private static string[] SearchedIndexes(FakeSearchService service)
     {
         lock (service.Requests)
         {
-            return service.Requests.Where(r => r.Path.Contains("search.post.search")).Select(r => IndexName(r.Path)!).ToArray();
+            return service.Requests.Where(r => r.Path.Contains("search.post.search")).Select(r => r.Path.Split("indexes('")[1].Split("')")[0]).ToArray();
         }
     }
 
-    private static int RequestCount(FakeSearchService service)
+    // Without zero-downtime rebuild: one Azure index, which a rebuild writes directly.
+    private static (FakeSearchService Service, FakeAzureIndexes Azure, IServiceProvider Services) CreatePlainWithTree()
     {
-        lock (service.Requests)
-        {
-            return service.Requests.Count;
-        }
-    }
-
-    private static void ClearRequests(FakeSearchService service)
-    {
-        lock (service.Requests)
-        {
-            service.Requests.Clear();
-        }
-    }
-
-    // A publish or site code: another async flow than the rebuild.
-    private static Task OutsideTheRebuild(Func<Task> write)
-    {
-        using (ExecutionContext.SuppressFlow())
-        {
-            return Task.Run(write);
-        }
+        var created = CreateWithTree(_ => { });
+        created.Azure.Aliases.Clear();
+        created.Azure.Indexes.Clear();
+        created.Azure.AddIndex(Name);
+        return created;
     }
 
     private static async Task WriteTreeAsync(IServiceProvider services)
@@ -87,12 +61,12 @@ public class AzureSearchRebuildDeleteTests
         var indexer = services.GetRequiredService<IIndexer>();
 
         await indexer.ResetAsync(IndexAlias);
-        ClearRequests(service);
+        service.ClearRequests();
         await indexer.DeleteAsync(IndexAlias, [Parent]);
 
         Assert.Multiple(() =>
         {
-            Assert.That(RequestCount(service), Is.Zero);
+            Assert.That(service.RequestCount, Is.Zero);
             Assert.That(azure.Aliases[Name], Is.EqualTo(SlotA), "The rebuild goes on.");
         });
     }
@@ -111,15 +85,34 @@ public class AzureSearchRebuildDeleteTests
 
         await indexer.ResetAsync(IndexAlias);
         await WriteAsync(services, item);
-        ClearRequests(service);
+        service.ClearRequests();
         await indexer.DeleteAsync(IndexAlias, [Parent]);
-        var requests = RequestCount(service);
+        var requests = service.RequestCount;
         await CompleteAsync(services);
 
         Assert.Multiple(() =>
         {
             Assert.That(requests, Is.Zero);
             Assert.That(azure.Documents[SlotB], Is.EqualTo(new[] { DocumentId(item) }), "The waiting document goes when the rebuild completes.");
+        });
+    }
+
+    // Umbraco Search never deletes an item that the rebuild wrote. Code inside the rebuild flow can, and the document stays.
+    [Test]
+    public async Task ARebuildDeleteKeepsADocumentTheRebuildWrote()
+    {
+        var (service, azure, services) = CreateWithTree();
+        var indexer = services.GetRequiredService<IIndexer>();
+
+        await indexer.ResetAsync(IndexAlias);
+        await WriteAsync(services, Parent);
+        service.ClearRequests();
+        await indexer.DeleteAsync(IndexAlias, [Parent]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(service.RequestCount, Is.Zero);
+            Assert.That(azure.Documents[SlotB], Is.EqualTo(new[] { DocumentId(Parent) }));
         });
     }
 
@@ -134,7 +127,7 @@ public class AzureSearchRebuildDeleteTests
         await RebuildAsync(services, [Guid.NewGuid(), Guid.NewGuid()], () => OutsideTheRebuild(async () =>
         {
             await WriteTreeAsync(services);
-            ClearRequests(service);
+            service.ClearRequests();
             await services.GetRequiredService<IIndexer>().DeleteAsync(IndexAlias, [Parent]);
         }));
 
@@ -151,7 +144,7 @@ public class AzureSearchRebuildDeleteTests
     {
         var (service, azure, services) = CreateWithTree();
         await WriteTreeAsync(services);
-        ClearRequests(service);
+        service.ClearRequests();
 
         await services.GetRequiredService<IIndexer>().DeleteAsync(IndexAlias, [Parent]);
 
@@ -166,15 +159,12 @@ public class AzureSearchRebuildDeleteTests
     [Test]
     public async Task APlainRebuildDeleteDeletesTheDescendants()
     {
-        var (service, azure, services) = CreateWithTree(_ => { });
-        azure.Aliases.Clear();
-        azure.Indexes.Clear();
-        azure.AddIndex(Name);
+        var (service, azure, services) = CreatePlainWithTree();
         var indexer = services.GetRequiredService<IIndexer>();
 
         await indexer.ResetAsync(IndexAlias);
         await WriteTreeAsync(services);
-        ClearRequests(service);
+        service.ClearRequests();
         await indexer.DeleteAsync(IndexAlias, [Parent]);
 
         Assert.Multiple(() =>
