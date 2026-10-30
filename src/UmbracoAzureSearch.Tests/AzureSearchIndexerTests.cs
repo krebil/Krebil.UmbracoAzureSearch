@@ -7,6 +7,7 @@ using Umbraco.Cms.Search.Core.Models.Searching.Filtering;
 using Umbraco.Cms.Search.Core.Models.Searching.Sorting;
 using UmbracoAzureSearch.Services;
 using UmbracoAzureSearch.Services.Factory;
+using UmbracoAzureSearch.Services.IndexAliasResolver;
 using UmbracoAzureSearch.Services.Indexer;
 using UmbracoAzureSearch.Services.IndexManager;
 using UmbracoAzureSearch.Services.Searcher;
@@ -207,6 +208,24 @@ public class AzureSearchIndexerTests : AzureSearchTestBase
         });
 
         await Indexer.ResetAsync(IndexAlias);
+    }
+
+    // A write deletes the documents of the variations the content does not have, whether they exist or not. Azure
+    // accepts the delete of a missing document as a success.
+    [Test]
+    public async Task DeletingADocumentThatDoesNotExistSucceeds()
+    {
+        await IndexManager.EnsureAsync(IndexAlias);
+        var searchClient = GetRequiredService<IAzureSearchClientFactory>().GetSearchIndexClient()
+            .GetSearchClient(GetRequiredService<IIndexAliasResolver>().Resolve(IndexAlias));
+
+        var results = await GetRequiredService<DocumentWriter>().DeleteAsync(searchClient, [$"{Guid.NewGuid():N}_inv_def"]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(results.Single().Succeeded, Is.True);
+            Assert.That(results.Single().Status, Is.EqualTo(200));
+        });
     }
 
     private async Task IndexCulturesAsync(Guid id, params string[] cultures)

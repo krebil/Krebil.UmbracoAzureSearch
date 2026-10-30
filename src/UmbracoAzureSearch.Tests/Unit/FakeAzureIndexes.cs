@@ -58,6 +58,9 @@ internal sealed class FakeAzureIndexes
     /// <summary>The documents of an upload that fail one by one, with Azure's message.</summary>
     public Dictionary<string, string> FailingDocuments { get; } = [];
 
+    /// <summary>The status code of a document in <see cref="FailingDocuments"/>; 400 when it has none.</summary>
+    public Dictionary<string, int> FailingStatuses { get; } = [];
+
     /// <summary>Adds an index with the base fields of the package (suggestions on, the default) and any extra fields.</summary>
     public void AddIndex(string name, params string[] extraFields)
     {
@@ -280,7 +283,7 @@ internal sealed class FakeAzureIndexes
                 var action = document.GetProperty("@search.action").GetString();
                 if (FailingDocuments.TryGetValue(id, out var message))
                 {
-                    results.Add($$"""{"key":"{{id}}","status":false,"errorMessage":"{{message}}","statusCode":400}""");
+                    results.Add($$"""{"key":"{{id}}","status":false,"errorMessage":"{{message}}","statusCode":{{FailingStatuses.GetValueOrDefault(id, 400)}}}""");
                     continue;
                 }
 

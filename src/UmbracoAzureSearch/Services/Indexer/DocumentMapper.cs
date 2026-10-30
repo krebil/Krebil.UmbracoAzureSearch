@@ -28,6 +28,12 @@ public class DocumentMapper
         public required List<IndexFieldMapping> FieldMappings { get; init; }
     }
 
+    /// <summary>
+    /// The id of the document of one variation: the content key, the culture (or "inv") and the segment (or "def").
+    /// </summary>
+    internal static string DocumentId(Guid id, string? culture, string? segment)
+        => $"{id.AsKeyword()}_{culture.IndexCulture()}_{segment.IndexSegment()}";
+
     public MappingResult MapToDocuments(
         Guid id,
         UmbracoObjectTypes objectType,
@@ -102,7 +108,7 @@ public class DocumentMapper
 
         var document = new SearchDocument()
         {
-            [IndexConstants.FieldNames.Id] = $"{id.AsKeyword()}_{culture}_{segment}",
+            [IndexConstants.FieldNames.Id] = DocumentId(id, variation.Culture, variation.Segment),
             [IndexConstants.FieldNames.ObjectType] = objectType.ToString(),
             [IndexConstants.FieldNames.Key] = id.AsKeyword(),
             [IndexConstants.FieldNames.Culture] = culture,

@@ -45,21 +45,23 @@ internal sealed class DocumentWriter(
 
     /// <summary>
     /// Adds the fields the documents need, then uploads them. Upload replaces the whole document. A merge would keep fields
-    /// that the content no longer has, so a cleared value would stay searchable. Per-document failures are in the results;
-    /// a request that Azure rejects throws.
+    /// that the content no longer has, so a cleared value would stay searchable. The documents in
+    /// <paramref name="deleteIds"/> are deleted in the same request; Azure accepts the delete of a document that does not
+    /// exist. Per-document failures are in the results; a request that Azure rejects throws.
     /// </summary>
     public Task<IReadOnlyList<IndexingResult>> UploadAsync(
-        PhysicalIndex physicalIndex, string indexAlias, IndexDefinition definition, List<SearchDocument> documents, List<IndexFieldMapping> fieldMappings)
-        => UploadAsync(physicalIndex, indexAlias, definition, documents, fieldMappings, readSchemaOnFailure: true);
+        PhysicalIndex physicalIndex, string indexAlias, IndexDefinition definition, List<SearchDocument> documents, List<IndexFieldMapping> fieldMappings,
+        IReadOnlyCollection<string>? deleteIds = null)
+        => UploadAsync(physicalIndex, indexAlias, definition, documents, fieldMappings, readSchemaOnFailure: true, deleteIds);
 
     private async Task<IReadOnlyList<IndexingResult>> UploadAsync(
         PhysicalIndex physicalIndex, string indexAlias, IndexDefinition definition, List<SearchDocument> documents,
-        List<IndexFieldMapping> fieldMappings, bool readSchemaOnFailure)
+        List<IndexFieldMapping> fieldMappings, bool readSchemaOnFailure, IReadOnlyCollection<string>? deleteIds = null)
     {
         var searchClient = azureSearchClientFactory.GetSearchIndexClient().GetSearchClient(physicalIndex.Name);
         var (indexFields, known) = await EnsureFieldsExist(physicalIndex, indexAlias, fieldMappings, documents, definition);
         DropMissingSuggestionCopies(physicalIndex.Name, documents, indexFields);
-        var actions = documents.Select(IndexDocumentsAction.Upload).ToArray();
+        var actions = documents.Select(IndexDocumentsAction.Upload).Concat((deleteIds ?? []).Select(DeleteAction)).ToArray();
         try
         {
             return await SendAsync(searchClient, actions);
@@ -77,8 +79,10 @@ internal sealed class DocumentWriter(
 
     /// <summary>Deletes documents by their id.</summary>
     public Task<IReadOnlyList<IndexingResult>> DeleteAsync(SearchClient searchClient, IEnumerable<string> documentIds)
-        => SendAsync(searchClient,
-            documentIds.Select(documentId => IndexDocumentsAction.Delete(new SearchDocument { [IndexConstants.FieldNames.Id] = documentId })).ToArray());
+        => SendAsync(searchClient, documentIds.Select(DeleteAction).ToArray());
+
+    private static IndexDocumentsAction<SearchDocument> DeleteAction(string documentId)
+        => IndexDocumentsAction.Delete(new SearchDocument { [IndexConstants.FieldNames.Id] = documentId });
 
     /// <summary>
     /// Sends the actions and returns a result per document. Throttled requests and documents are sent again (see the
