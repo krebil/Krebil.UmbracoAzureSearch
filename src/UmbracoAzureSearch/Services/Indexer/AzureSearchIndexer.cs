@@ -142,13 +142,26 @@ public class AzureSearchIndexer(
 
         var mappingResult = documentMapper.MapToDocuments(id, objectType, variations, fields, protection, definition);
 
-        var indexFields = await EnsureFieldsExist(physicalIndex, indexAlias, mappingResult.FieldMappings, definition);
+        var (indexFields, known) = await EnsureFieldsExist(physicalIndex, indexAlias, mappingResult.FieldMappings, mappingResult.Documents, definition);
         DropMissingSuggestionCopies(physicalIndex.Name, mappingResult.Documents, indexFields);
         // Upload replaces the whole document. A merge would keep fields that the content no longer has,
         // so a cleared value would stay searchable.
         var batch = IndexDocumentsBatch.Upload(mappingResult.Documents);
         logger.LogDebug("Indexing {DocumentCount} document(s) for {Id} into {IndexAlias} ({IndexName})", mappingResult.Documents.Count, id, indexAlias, physicalIndex.Name);
-        var result = await searchClient.IndexDocumentsAsync(batch, new IndexDocumentsOptions { ThrowOnAnyError = false });
+        Response<IndexDocumentsResult> result;
+        try
+        {
+            result = await searchClient.IndexDocumentsAsync(batch, new IndexDocumentsOptions { ThrowOnAnyError = false });
+        }
+        catch (RequestFailedException ex) when (ex.Status == 400 && known)
+        {
+            // The known field names were out of date: another server created the index again without a field. Read the
+            // schema, add the field, and write once more.
+            logger.LogDebug(ex, "Azure rejected the documents of {Id} for {IndexName}. Reading the schema again", id, physicalIndex.Name);
+            serviceProvider.GetRequiredService<IndexSchemaUpdates>().Forget(physicalIndex.Name);
+            await EnsureFieldsExist(physicalIndex, indexAlias, mappingResult.FieldMappings, mappingResult.Documents, definition);
+            result = await searchClient.IndexDocumentsAsync(batch, new IndexDocumentsOptions { ThrowOnAnyError = false });
+        }
         var failed = result.Value.Results.Where(r => !r.Succeeded).ToList();
         if (failed.Count > 0)
         {
@@ -274,50 +287,56 @@ public class AzureSearchIndexer(
         static string Identifier(IndexField field) => $"{field.FieldName}|{field.Culture}|{field.Segment}";
     }
 
-    private async Task<HashSet<string>> EnsureFieldsExist(
-        PhysicalIndex physicalIndex, string indexAlias, List<IndexFieldMapping> fieldMappings, IndexDefinition definition)
+    // Adds the fields the documents need and the index lacks. Returns the field names of the index, and true when they
+    // came from memory without a read.
+    private async Task<(IReadOnlySet<string> Fields, bool Known)> EnsureFieldsExist(
+        PhysicalIndex physicalIndex, string indexAlias, List<IndexFieldMapping> fieldMappings, IEnumerable<SearchDocument> documents, IndexDefinition definition)
     {
         var indexName = physicalIndex.Name;
-        var indexClient = azureSearchClientFactory.GetSearchIndexClient();
-        Response<SearchIndex> index;
-        try
-        {
-            index = await indexClient.GetIndexAsync(indexName);
-        }
-        catch (RequestFailedException ex) when (ex.Status == 404 && definition.IndexPerCulture)
-        {
-            // The fallback index of IndexPerCulture, for the first document of a language outside the map.
-            logger.LogWarning("Creating index {IndexName} for a culture outside the culture map. Rebuild the index to fill it with existing content.", indexName);
-            var profiles = await serviceProvider.GetRequiredService<ScoringProfileSources>().GetAsync(indexAlias);
-            index = await indexClient.CreateIndexAsync(IndexSchema.Build(physicalIndex, indexAlias, definition.WithProviderProfiles(profiles)));
-        }
-        index.ThrowIfNull();
+        var schema = serviceProvider.GetRequiredService<IndexSchemaUpdates>();
 
-        // The per-culture aggregate copies of a culture added to the definition
-        var changed = IndexSchema.AddMissingCopies(index.Value, definition);
+        // A suggestion copy the index lacks is dropped from the documents, not added (see DropMissingSuggestionCopies).
+        var needed = documents.SelectMany(d => d.Keys).Concat(fieldMappings.Select(m => m.FieldName))
+            .Where(name => !name.StartsWith($"{IndexConstants.FieldNames.Suggestion}_", StringComparison.Ordinal))
+            .ToHashSet(StringComparer.Ordinal);
+        bool HasAll(IReadOnlySet<string> fields) => needed.All(fields.Contains);
+        if (schema.KnownFields(indexName) is { } known && HasAll(known))
+            return (known, true);
 
-        var currentFieldNames = index.Value.Fields.Select(f => f.Name).ToHashSet();
+        var fields = await schema.UpdateAsync(
+            indexName,
+            index =>
+            {
+                // The per-culture aggregate copies of a culture added to the definition
+                var changed = IndexSchema.AddMissingCopies(index, definition);
+                var currentFieldNames = index.Fields.Select(f => f.Name).ToHashSet();
 
-        // Find missing fields, and add them to the index schema using metadata from field mappings
-        foreach (var mapping in fieldMappings.Where(m => !currentFieldNames.Contains(m.FieldName)).DistinctBy(m => m.FieldName))
-        {
-            index.Value.Fields.Add(CreateFieldDefinition(mapping));
-            currentFieldNames.Add(mapping.FieldName);
-            changed = true;
-        }
+                // Find missing fields, and add them to the index schema using metadata from field mappings
+                foreach (var mapping in fieldMappings.Where(m => !currentFieldNames.Contains(m.FieldName)).DistinctBy(m => m.FieldName))
+                {
+                    index.Fields.Add(IndexSchema.CreateField(mapping));
+                    currentFieldNames.Add(mapping.FieldName);
+                    changed = true;
+                }
 
-        // Update the index with new fields
-        if (changed)
-        {
-            await indexClient.CreateOrUpdateIndexAsync(index.Value);
-        }
-
-        return currentFieldNames;
+                return changed;
+            },
+            definition.IndexPerCulture
+                ? async () =>
+                {
+                    // The fallback index of IndexPerCulture, for the first document of a language outside the map.
+                    logger.LogWarning("Creating index {IndexName} for a culture outside the culture map. Rebuild the index to fill it with existing content.", indexName);
+                    var profiles = await serviceProvider.GetRequiredService<ScoringProfileSources>().GetAsync(indexAlias);
+                    return IndexSchema.Build(physicalIndex, indexAlias, definition.WithProviderProfiles(profiles));
+                }
+                : null,
+            HasAll);
+        return (fields, false);
     }
 
     // Azure adds fields to a suggester only when it creates the suggester, so a suggestion copy of a culture added
     // after the index was created waits for a rebuild. Writing it before would fail the whole document.
-    private void DropMissingSuggestionCopies(string indexName, List<SearchDocument> documents, HashSet<string> indexFields)
+    private void DropMissingSuggestionCopies(string indexName, List<SearchDocument> documents, IReadOnlySet<string> indexFields)
     {
         var prefix = $"{IndexConstants.FieldNames.Suggestion}_";
         var missing = documents.SelectMany(d => d.Keys)
@@ -340,25 +359,6 @@ public class AzureSearchIndexer(
                 "Index {IndexName} has no suggestion fields {Fields}. Rebuild the index to add them.",
                 indexName, string.Join(", ", missing.Order()));
         }
-    }
-
-    private SearchField CreateFieldDefinition(IndexFieldMapping mapping)
-    {
-        // Create the appropriate SearchFieldDataType
-        var searchFieldDataType = mapping.IsCollection
-            ? SearchFieldDataType.Collection(mapping.FieldType)
-            : mapping.FieldType;
-
-        var field = new SearchField(mapping.FieldName, searchFieldDataType)
-        {
-            IsFilterable = mapping.IsFilterable ?? !mapping.IsSortable,
-            IsSortable = mapping.IsSortable,
-            IsFacetable = mapping.IsFacetable,
-            IsSearchable = mapping.IsSearchable,
-            AnalyzerName = mapping.AnalyzerName is null ? (LexicalAnalyzerName?)null : new LexicalAnalyzerName(mapping.AnalyzerName),
-        };
-
-        return field;
     }
 
     public async Task DeleteAsync(string indexAlias, IEnumerable<Guid> ids)

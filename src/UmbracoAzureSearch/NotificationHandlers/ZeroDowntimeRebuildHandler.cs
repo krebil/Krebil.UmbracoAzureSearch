@@ -19,6 +19,7 @@ namespace UmbracoAzureSearch.NotificationHandlers;
 /// </summary>
 internal sealed class ZeroDowntimeRebuildHandler(
     IndexSlots slots,
+    IndexSchemaUpdates schemaUpdates,
     IAzureSearchClientFactory azureSearchClientFactory,
     IOptionsMonitor<AzureSearchIndexOptions> azureSearchIndexOptions,
     IEventAggregator eventAggregator,
@@ -72,10 +73,12 @@ internal sealed class ZeroDowntimeRebuildHandler(
             if (rebuild.OldIsPlainIndex)
             {
                 await indexClient.DeleteIndexAsync(rebuild.Name, CancellationToken.None);
+                schemaUpdates.Forget(rebuild.Name);
             }
 
             await indexClient.CreateOrUpdateAliasAsync(new SearchAlias(rebuild.Name, rebuild.New), cancellationToken: CancellationToken.None);
             slots.Forget(rebuild.Name);
+            schemaUpdates.Forget(rebuild.New);
             logger.LogInformation(
                 "Swap done for {IndexAlias}: {Name} moved from {OldIndex} to {NewIndex}. Documents {OldDocumentCount} before, {NewDocumentCount} after, rebuild took {Duration}. Dropped scoring profiles: {DroppedScoringProfiles}",
                 indexAlias, rebuild.Name, rebuild.Old ?? "(none)", rebuild.New, oldCount, newCount, DateTimeOffset.UtcNow - rebuild.Started,
@@ -125,6 +128,7 @@ internal sealed class ZeroDowntimeRebuildHandler(
             try
             {
                 await azureSearchClientFactory.GetSearchIndexClient().DeleteIndexAsync(oldIndex, CancellationToken.None);
+                schemaUpdates.Forget(oldIndex);
                 logger.LogInformation("Old index deleted for {IndexAlias}: {OldIndex}", indexAlias, oldIndex);
             }
             catch (Exception exception)
@@ -146,6 +150,7 @@ internal sealed class ZeroDowntimeRebuildHandler(
             try
             {
                 await azureSearchClientFactory.GetSearchIndexClient().DeleteIndexAsync(rebuild.New, CancellationToken.None);
+                schemaUpdates.Forget(rebuild.New);
             }
             catch (Exception exception)
             {

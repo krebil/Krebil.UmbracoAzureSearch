@@ -459,6 +459,17 @@ internal static class IndexSchema
             AnalyzerName = analyzer,
         };
 
+    /// <summary>The field definition of a field that documents bring: the lazy path adds it when the first document has it.</summary>
+    public static SearchField CreateField(IndexFieldMapping mapping)
+        => new(mapping.FieldName, mapping.IsCollection ? SearchFieldDataType.Collection(mapping.FieldType) : mapping.FieldType)
+        {
+            IsFilterable = mapping.IsFilterable ?? !mapping.IsSortable,
+            IsSortable = mapping.IsSortable,
+            IsFacetable = mapping.IsFacetable,
+            IsSearchable = mapping.IsSearchable,
+            AnalyzerName = Analyzer(mapping.AnalyzerName),
+        };
+
     // The index definition in code; EnsureAsync, ResetAsync and the indexer create indexes from it.
     public static SearchIndex Build(PhysicalIndex physicalIndex, string indexAlias, IndexDefinition definition, bool runCallbacks = true)
     {
