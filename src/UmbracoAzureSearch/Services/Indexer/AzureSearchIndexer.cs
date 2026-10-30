@@ -160,27 +160,9 @@ public class AzureSearchIndexer(
 
         var mappingResult = documentMapper.MapToDocuments(id, objectType, variations, fields, protection, definition);
 
-        var (indexFields, known) = await EnsureFieldsExist(physicalIndex, indexAlias, mappingResult.FieldMappings, mappingResult.Documents, definition);
-        DropMissingSuggestionCopies(physicalIndex.Name, mappingResult.Documents, indexFields);
-        // Upload replaces the whole document. A merge would keep fields that the content no longer has,
-        // so a cleared value would stay searchable.
-        var batch = IndexDocumentsBatch.Upload(mappingResult.Documents);
         logger.LogDebug("Indexing {DocumentCount} document(s) for {Id} into {IndexAlias} ({IndexName})", mappingResult.Documents.Count, id, indexAlias, physicalIndex.Name);
-        Response<IndexDocumentsResult> result;
-        try
-        {
-            result = await searchClient.IndexDocumentsAsync(batch, new IndexDocumentsOptions { ThrowOnAnyError = false });
-        }
-        catch (RequestFailedException ex) when (ex.Status == 400 && known)
-        {
-            // The known field names were out of date: another server created the index again without a field. Read the
-            // schema, add the field, and write once more.
-            logger.LogDebug(ex, "Azure rejected the documents of {Id} for {IndexName}. Reading the schema again", id, physicalIndex.Name);
-            serviceProvider.GetRequiredService<IndexSchemaUpdates>().Forget(physicalIndex.Name);
-            await EnsureFieldsExist(physicalIndex, indexAlias, mappingResult.FieldMappings, mappingResult.Documents, definition);
-            result = await searchClient.IndexDocumentsAsync(batch, new IndexDocumentsOptions { ThrowOnAnyError = false });
-        }
-        var failed = result.Value.Results.Where(r => !r.Succeeded).ToList();
+        var results = await UploadAsync(physicalIndex, indexAlias, definition, mappingResult.Documents, mappingResult.FieldMappings);
+        var failed = results.Where(r => !r.Succeeded).ToList();
         if (failed.Count > 0)
         {
             foreach (var failure in failed)
@@ -205,6 +187,31 @@ public class AzureSearchIndexer(
                 // The upload succeeded, so the content is indexed. The next reindex cleans up again.
                 logger.LogWarning(ex, "Failed to delete documents of removed variations for {Id} from {IndexAlias}", id, indexAlias);
             }
+        }
+    }
+
+    // Adds the fields the documents need, then uploads them. Upload replaces the whole document. A merge would keep fields
+    // that the content no longer has, so a cleared value would stay searchable.
+    private async Task<IReadOnlyList<IndexingResult>> UploadAsync(
+        PhysicalIndex physicalIndex, string indexAlias, IndexDefinition definition, List<SearchDocument> documents, List<IndexFieldMapping> fieldMappings)
+    {
+        var searchClient = azureSearchClientFactory.GetSearchIndexClient().GetSearchClient(physicalIndex.Name);
+        var writer = serviceProvider.GetRequiredService<DocumentWriter>();
+        var (indexFields, known) = await EnsureFieldsExist(physicalIndex, indexAlias, fieldMappings, documents, definition);
+        DropMissingSuggestionCopies(physicalIndex.Name, documents, indexFields);
+        var actions = documents.Select(IndexDocumentsAction.Upload).ToArray();
+        try
+        {
+            return await writer.SendAsync(searchClient, actions);
+        }
+        catch (RequestFailedException ex) when (ex.Status == 400 && known)
+        {
+            // The known field names were out of date: another server created the index again without a field. Read the
+            // schema, add the field, and write once more.
+            logger.LogDebug(ex, "Azure rejected a write to {IndexName}. Reading the schema again", physicalIndex.Name);
+            serviceProvider.GetRequiredService<IndexSchemaUpdates>().Forget(physicalIndex.Name);
+            await EnsureFieldsExist(physicalIndex, indexAlias, fieldMappings, documents, definition);
+            return await writer.SendAsync(searchClient, actions);
         }
     }
 
@@ -239,14 +246,18 @@ public class AzureSearchIndexer(
             return;
 
         logger.LogDebug("Deleting {DocumentCount} document(s) of removed variations for {Id} from {IndexAlias}", removedIds.Count, id, indexAlias);
-        var deleteResult = await searchClient.DeleteDocumentsAsync(IndexConstants.FieldNames.Id, removedIds, new IndexDocumentsOptions { ThrowOnAnyError = false });
-        foreach (var failure in deleteResult.Value.Results.Where(r => !r.Succeeded))
+        var deleteResults = await DeleteDocumentsAsync(searchClient, removedIds);
+        foreach (var failure in deleteResults.Where(r => !r.Succeeded))
         {
             logger.LogError(
                 "Failed to delete document {DocumentKey} of a removed variation for content {Id} from {IndexAlias}: [{StatusCode}] {ErrorMessage}",
                 failure.Key, id, indexAlias, failure.Status, failure.ErrorMessage);
         }
     }
+
+    private Task<IReadOnlyList<IndexingResult>> DeleteDocumentsAsync(SearchClient searchClient, IEnumerable<string> documentIds)
+        => serviceProvider.GetRequiredService<DocumentWriter>().SendAsync(searchClient,
+            documentIds.Select(documentId => IndexDocumentsAction.Delete(new SearchDocument { [IndexConstants.FieldNames.Id] = documentId })).ToArray());
 
     private bool InContentTypeScope(IndexDefinition definition, UmbracoObjectTypes objectType, IReadOnlyCollection<IndexField> fields)
     {
@@ -437,8 +448,8 @@ public class AzureSearchIndexer(
         if (documentIds.Any())
         {
             logger.LogDebug("Deleting {DocumentCount} document(s) from {IndexAlias} for ids {Ids}", documentIds.Count, indexAlias, ids);
-            var deleteResult = await searchClient.DeleteDocumentsAsync(IndexConstants.FieldNames.Id, documentIds, new IndexDocumentsOptions { ThrowOnAnyError = false });
-            var failedDeletes = deleteResult.Value.Results.Where(r => !r.Succeeded).ToList();
+            var deleteResults = await DeleteDocumentsAsync(searchClient, documentIds);
+            var failedDeletes = deleteResults.Where(r => !r.Succeeded).ToList();
             if (failedDeletes.Count > 0)
             {
                 foreach (var failure in failedDeletes)

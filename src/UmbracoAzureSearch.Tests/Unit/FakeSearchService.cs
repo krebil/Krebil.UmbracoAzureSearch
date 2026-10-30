@@ -64,8 +64,9 @@ internal sealed class FakeSearchService : HttpMessageHandler
             .AddUmbracoAzureSearch(configuration);
         ConfigureServices?.Invoke(serviceCollection);
         var services = serviceCollection.BuildServiceProvider();
-        ((AzureSearchClientFactory)services.GetRequiredService<IAzureSearchClientFactory>()).Transport =
-            new HttpClientTransport(new HttpClient(this));
+        var factory = (AzureSearchClientFactory)services.GetRequiredService<IAzureSearchClientFactory>();
+        factory.Transport = new HttpClientTransport(new HttpClient(this));
+        factory.MaxRetries = 0;
         return services;
     }
 
