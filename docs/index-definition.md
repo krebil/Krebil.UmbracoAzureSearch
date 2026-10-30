@@ -193,7 +193,7 @@ Each variation of a content item is one Azure document. The document id is the c
 Each write holds all variations of the item. A variation that the item no longer has, for example an unpublished culture, must lose its document. The package sends one request for each write to an Azure index:
 
 - An upload for each variation that the item has.
-- A delete for each other variation that the item can have: one for each Umbraco language and one for the invariant document.
+- A delete for each other variation that the item can have. The package sends one delete for each Umbraco language and one for the invariant document.
 
 Azure accepts the delete of a document that does not exist. It answers with status 200 for that document.
 
@@ -202,10 +202,11 @@ Azure accepts the delete of a document that does not exist. It answers with stat
 | No segments | Uploads and deletes in one request. |
 | `IndexPerCulture` | Each Azure index gets the deletes of its own cultures and of the invariant document. An index that gets no upload gets one request with deletes only. |
 | A variation or field of the write has a segment | The package cannot list the segments of an item. It uploads, then searches for the documents of the item, and deletes the documents it did not upload. |
+| The content type of the item varies by segment | As with a segment. An item can lose its last segment value. |
 | The package cannot read the Umbraco languages | As with a segment. |
 | A rebuild write | No deletes and no search. The rebuild index starts empty. See [Writes during a rebuild](zero-downtime-rebuild.md#writes-during-a-rebuild). |
 
-An item that no longer varies by segment keeps its segment documents. Its next write has no segment, so the package does not search. Rebuild the index after you remove segment variance from a document type.
+When you remove segment variance from a document type, its items keep their segment documents. Their next writes have no segment, so the package does not search. Rebuild the index after this change.
 
 When you delete an Umbraco language, Umbraco Search rebuilds every index with documents. The rebuild removes the documents of that language. Until the rebuild completes, the old index still has them.
 

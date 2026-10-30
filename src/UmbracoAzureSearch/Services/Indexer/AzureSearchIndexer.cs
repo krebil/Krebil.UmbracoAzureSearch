@@ -68,12 +68,12 @@ public class AzureSearchIndexer(
             // The index may still hold a culture that the content no longer has.
             logger.LogDebug("Skipping {Id} for {IndexAlias}: none of its cultures is in the index", id, indexAlias);
             await DeleteRemovedVariationsAsync(indexAlias, definition, id, all, rebuildWrite,
-                rebuildWrite ? null : await CandidateIdsAsync(indexAlias, definition, id, allVariations, fieldList));
+                rebuildWrite ? null : await CandidateIdsAsync(indexAlias, definition, id, objectType, allVariations, fieldList));
             return;
         }
 
         fieldList = await AddIndexerFieldsAsync(indexAlias, definition, id, objectType, variationList, fieldList);
-        var candidates = rebuildWrite ? null : await CandidateIdsAsync(indexAlias, definition, id, allVariations, fieldList);
+        var candidates = rebuildWrite ? null : await CandidateIdsAsync(indexAlias, definition, id, objectType, allVariations, fieldList);
 
         // IndexPerCulture: each culture goes to its own index, invariant documents to every index of the alias.
         var targets = variationList
@@ -97,18 +97,22 @@ public class AzureSearchIndexer(
     // The ids of the documents the content can have in an Azure index: one per Umbraco language, and the invariant
     // document. With IndexPerCulture an index only holds its own cultures, and the invariant document. The write deletes
     // the ids it does not upload, in the same request, so it needs no search. The package cannot list the segments, so
-    // with a segment in the write the result is null and the write searches as before. Null too when the languages
-    // cannot be read.
+    // with a segment in the write, or a content type that varies by segment (an item can lose its last segment value),
+    // the result is null and the write searches as before. Null too when the languages cannot be read.
     private async Task<Func<PhysicalIndex, string[]>?> CandidateIdsAsync(
-        string indexAlias, IndexDefinition definition, Guid id, Variation[] variations, IReadOnlyCollection<IndexField> fields)
+        string indexAlias, IndexDefinition definition, Guid id, UmbracoObjectTypes objectType, Variation[] variations,
+        IReadOnlyCollection<IndexField> fields)
     {
-        if (variations.Any(v => v.Segment is not null) || fields.Any(f => f.Segment is not null))
+        var contentSource = serviceProvider.GetRequiredService<IUmbracoContentSource>();
+        if (variations.Any(v => v.Segment is not null)
+            || fields.Any(f => f.Segment is not null)
+            || (ContentTypeKey(fields) is { } contentTypeKey && contentSource.VariesBySegment(contentTypeKey, objectType)))
             return null;
 
         string[] languages;
         try
         {
-            languages = await serviceProvider.GetRequiredService<IUmbracoContentSource>().GetLanguageIsoCodesAsync();
+            languages = await contentSource.GetLanguageIsoCodesAsync();
         }
         catch (Exception exception)
         {
@@ -326,15 +330,19 @@ public class AzureSearchIndexer(
         if (definition.Options.ContentTypes is not { Count: > 0 } contentTypes)
             return true;
 
-        var contentTypeId = fields
-            .FirstOrDefault(f => f.FieldName == Umbraco.Cms.Search.Core.Constants.FieldNames.ContentTypeId)?
-            .Value.Keywords?.FirstOrDefault();
-        if (!Guid.TryParse(contentTypeId, out var contentTypeKey))
+        if (ContentTypeKey(fields) is not { } contentTypeKey)
             return false;
 
         var contentSource = serviceProvider.GetRequiredService<IUmbracoContentSource>();
         return contentTypes.Any(alias => contentSource.GetContentTypeKey(alias, objectType) == contentTypeKey);
     }
+
+    private static Guid? ContentTypeKey(IReadOnlyCollection<IndexField> fields)
+        => Guid.TryParse(
+            fields.FirstOrDefault(f => f.FieldName == Umbraco.Cms.Search.Core.Constants.FieldNames.ContentTypeId)?.Value.Keywords?.FirstOrDefault(),
+            out var contentTypeKey)
+            ? contentTypeKey
+            : null;
 
     // Runs the per-index indexers. Their fields go through the same definition as the fields from Umbraco Search.
     private async Task<IReadOnlyCollection<IndexField>> AddIndexerFieldsAsync(
