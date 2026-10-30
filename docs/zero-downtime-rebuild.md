@@ -67,11 +67,28 @@ Umbraco Search runs a rebuild as one background task: it calls `ResetAsync`, the
 
 | Write | Goes to | Removed variations |
 |---|---|---|
-| A write or delete of the rebuild | The new index only | None. The new index starts empty. |
+| A write of the rebuild | The new index only | None. The new index starts empty. |
+| A delete of the rebuild | Nowhere. The package sends no request. | None |
 | A publish, save or delete during the rebuild | Both indexes | Deleted in both indexes, in the request of the upload |
 | A direct call to `IIndexer` or `IAzureSearchIndexer` from your code | Both indexes | Deleted in both indexes, in the request of the upload |
 
 See [Removed variations](index-definition.md#removed-variations) for how the package finds the documents to delete.
+
+### Deletes of the rebuild
+
+Umbraco Search deletes each item without a published variation during the rebuild, for example an unpublished page. Outside a rebuild, a delete searches the index for the documents of the item and its descendants (`Umb_PathIds`), then deletes them. During a zero-downtime rebuild the package skips the delete:
+
+- Umbraco Search writes no document of an item that it deletes.
+- Umbraco Search skips the descendants of that item.
+- The new index only holds what the rebuild wrote.
+
+So the new index holds no document of the item or its descendants, and none waits in the batch. The search would find nothing and cost one request per item.
+
+Example: a zero-downtime rebuild of 17,895 documents on staging sent 2,381 of these searches in a few minutes. The rebuild fell from about 2,000 to about 200 documents a minute.
+
+A delete outside the rebuild flow searches and deletes as before, in both indexes. A rebuild without zero-downtime rebuild writes the live index, so its deletes also search and delete as before.
+
+A delete from code inside the rebuild flow, for example a `ContentIndexingNotification` handler, is also skipped. To keep an item out of the rebuild, cancel its `ContentIndexingNotification`.
 
 Content changes made during the rebuild wait in the Umbraco Search queue and run after it, so they reach the new index after the swap. A publish during a rebuild shows up in search when the rebuild ends. Nothing is lost.
 
