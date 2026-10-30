@@ -8,17 +8,22 @@ using Umbraco.Cms.Search.Core.Notifications;
 using UmbracoAzureSearch.Models;
 using UmbracoAzureSearch.Notifications;
 using UmbracoAzureSearch.Services.Factory;
+using UmbracoAzureSearch.Services.Indexer;
 using UmbracoAzureSearch.Services.IndexManager;
 
 namespace UmbracoAzureSearch.NotificationHandlers;
 
 /// <summary>
-/// Ends a zero-downtime rebuild: moves the alias to the new slot when the rebuild succeeded, or deletes the new slot.
+/// Ends a rebuild: sends the rest of a batched rebuild. For a zero-downtime rebuild it then moves the alias to the new slot
+/// when the rebuild succeeded, or deletes the new slot.
 /// Umbraco Search publishes the completed notification also for a cancelled rebuild, so the token decides; a rebuild that
 /// throws publishes nothing, and the next rebuild or the next startup cleans up.
 /// </summary>
 internal sealed class ZeroDowntimeRebuildHandler(
     IndexSlots slots,
+    IndexSchemaUpdates schemaUpdates,
+    RebuildWrites rebuildWrites,
+    DocumentWriter documentWriter,
     IAzureSearchClientFactory azureSearchClientFactory,
     IOptionsMonitor<AzureSearchIndexOptions> azureSearchIndexOptions,
     IEventAggregator eventAggregator,
@@ -28,15 +33,45 @@ internal sealed class ZeroDowntimeRebuildHandler(
     public async Task HandleAsync(IndexRebuildCompletedNotification notification, CancellationToken cancellationToken)
     {
         var indexAlias = notification.IndexAlias;
-        var rebuilds = slots.Take(indexAlias);
+        var batch = rebuildWrites.Active(indexAlias)?.Batch;
+        // The rebuild stays in progress until the rest of the batch is written and counted, so a publish in that time
+        // still goes to both slots.
+        var rebuilds = slots.Running(indexAlias);
         if (rebuilds.Length == 0)
+        {
+            // An index without zero-downtime rebuild: the index is live, so the rest of the batch goes also after a cancel.
+            await EndAsync(indexAlias, batch, cancellationToken.IsCancellationRequested);
             return;
+        }
 
         if (cancellationToken.IsCancellationRequested)
         {
-            await SkipAsync(indexAlias, rebuilds, "the rebuild was cancelled", []);
+            // No swap happens, so the documents that wait in the batch are dropped with the new slot.
+            var dropped = await DocumentWriter.DropAsync(batch);
+            slots.Take(indexAlias);
+            rebuildWrites.End(indexAlias);
+            await SkipAsync(indexAlias, rebuilds, dropped > 0 ? $"the rebuild was cancelled ({dropped} batched documents not sent)" : "the rebuild was cancelled", []);
             return;
         }
+
+        // The rest of the batch goes before the count check. Azure counts a document about a second after the write, so
+        // the count waits for the last batch.
+        try
+        {
+            await documentWriter.FlushAsync(batch);
+            await Task.WhenAll(rebuilds.Select(rebuild => documentWriter.WaitUntilSearchableAsync(batch, rebuild.New, CountAsync)));
+        }
+        catch (Exception exception)
+        {
+            slots.Take(indexAlias);
+            rebuildWrites.End(indexAlias);
+            await SkipAsync(indexAlias, rebuilds, $"the last batch failed: {exception.Message}", []);
+            return;
+        }
+
+        // Writes from now on are not rebuild writes, and go to the live index only.
+        slots.Take(indexAlias);
+        rebuildWrites.End(indexAlias);
 
         var options = azureSearchIndexOptions.Get(indexAlias);
         (SlotRebuild Rebuild, long OldCount, long NewCount)[] counts;
@@ -72,10 +107,12 @@ internal sealed class ZeroDowntimeRebuildHandler(
             if (rebuild.OldIsPlainIndex)
             {
                 await indexClient.DeleteIndexAsync(rebuild.Name, CancellationToken.None);
+                schemaUpdates.Forget(rebuild.Name);
             }
 
             await indexClient.CreateOrUpdateAliasAsync(new SearchAlias(rebuild.Name, rebuild.New), cancellationToken: CancellationToken.None);
             slots.Forget(rebuild.Name);
+            schemaUpdates.Forget(rebuild.New);
             logger.LogInformation(
                 "Swap done for {IndexAlias}: {Name} moved from {OldIndex} to {NewIndex}. Documents {OldDocumentCount} before, {NewDocumentCount} after, rebuild took {Duration}. Dropped scoring profiles: {DroppedScoringProfiles}",
                 indexAlias, rebuild.Name, rebuild.Old ?? "(none)", rebuild.New, oldCount, newCount, DateTimeOffset.UtcNow - rebuild.Started,
@@ -104,6 +141,24 @@ internal sealed class ZeroDowntimeRebuildHandler(
         });
     }
 
+    // Ends the rebuild of an index without zero-downtime rebuild: the rest of the batch goes to the live index.
+    private async Task EndAsync(string indexAlias, RebuildBatch? batch, bool cancelled)
+    {
+        try
+        {
+            await documentWriter.FlushAsync(batch);
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "The last batch of the rebuild of {IndexAlias} failed{Cancelled}. Rebuild the index again", indexAlias, cancelled ? " after a cancel" : string.Empty);
+        }
+        finally
+        {
+            // Writes from now on are not rebuild writes.
+            rebuildWrites.End(indexAlias);
+        }
+    }
+
     // The swap is done, so a failing handler must not stop the delete of the old indexes.
     // The swap is committed, so the handlers get no cancellation, as the alias update.
     private async Task PublishSwappedAsync(string indexAlias, AzureIndexSwap[] swaps)
@@ -125,6 +180,7 @@ internal sealed class ZeroDowntimeRebuildHandler(
             try
             {
                 await azureSearchClientFactory.GetSearchIndexClient().DeleteIndexAsync(oldIndex, CancellationToken.None);
+                schemaUpdates.Forget(oldIndex);
                 logger.LogInformation("Old index deleted for {IndexAlias}: {OldIndex}", indexAlias, oldIndex);
             }
             catch (Exception exception)
@@ -146,6 +202,7 @@ internal sealed class ZeroDowntimeRebuildHandler(
             try
             {
                 await azureSearchClientFactory.GetSearchIndexClient().DeleteIndexAsync(rebuild.New, CancellationToken.None);
+                schemaUpdates.Forget(rebuild.New);
             }
             catch (Exception exception)
             {

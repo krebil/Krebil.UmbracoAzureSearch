@@ -84,6 +84,23 @@ Their texts also feed the free-text query on all fields (`allTexts`).
 
 The Umbraco system fields (`Umb_Id`, `Umb_ParentId`, `Umb_PathIds`, `Umb_ContentTypeId`, `Umb_Name`, `Umb_CreateDate`, `Umb_UpdateDate`, `Umb_Level`, `Umb_SortOrder`, `Umb_ObjectType`, `Umb_Tags`) are always written. Deletes, the backoffice and the Delivery API use them.
 
+### Fields of a new index
+
+A new index (at startup, at a rebuild, or a new fallback index) has the fields the definition knows before any document, with the attributes the definition gives them. They are the same fields the first document with them adds.
+
+| Fields | Value type |
+|---|---|
+| `Umb_Id`, `Umb_ParentId`, `Umb_PathIds`, `Umb_ContentTypeId`, `Umb_ObjectType`, `Umb_Tags` | Keywords |
+| `Umb_CreateDate`, `Umb_UpdateDate` | Dates |
+| `Umb_Level`, `Umb_SortOrder` | Integers |
+| `Umb_Name` | Texts |
+| Delivery API index handler fields: `StringRaw` | Keywords |
+| Delivery API index handler fields: `StringAnalyzed`, `StringSortable` | Texts |
+| Delivery API index handler fields: `Number` | Decimals |
+| Delivery API index handler fields: `Date` | Dates |
+
+The value types are the ones Umbraco Search writes. A field the definition leaves out, or an attribute it does not give, is not created. Opted-in and automatic property fields come with the first document that has them, because their value types depend on the content. An existing index does not change: documents add these fields as before.
+
 ## Check the fields of an index
 
 `AzureSearchIndexOptions.ResolveField(fieldName)` returns the attributes a field gets in the index. It returns null when the index does not keep the field. It uses the same rule as the indexer, so a test can check the definition of an index without Azure.
@@ -167,7 +184,7 @@ Every indexing path ends in the package's indexer, and the indexer applies the d
 - A rebuild from the backoffice.
 - Direct calls to `IIndexer` or `IAzureSearchIndexer` from your code, for example in a background job.
 
-The indexer also adds new fields to the Azure schema as documents bring them. The schema follows the same attributes.
+The indexer also adds new fields to the Azure schema as documents bring them. The schema follows the same attributes. Schema updates of one Azure index run one at a time. See [Busy services](zero-downtime-rebuild.md#busy-services).
 
 ## Field budget
 
@@ -184,7 +201,7 @@ The package counts the fields at startup and stops startup when the count is ove
 | Each searchable field (automatic fields off) | 4 |
 | Each filterable or facetable field (automatic fields off) | 1 |
 | Each sortable field (automatic fields off) | 1 |
-| Each Delivery API index handler field that is not opted in (automatic fields off) | 6 for a text, 2 for other values |
+| Each Delivery API index handler field that is not opted in | 6 for a text, 2 for other values |
 
 The count is an upper limit for a field with one value type. A searchable and filterable text field counts 5 and uses 4.
 

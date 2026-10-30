@@ -312,6 +312,13 @@ public class DocumentMapper
             .ToArray();
     }
 
+    /// <summary>
+    /// The physical fields of one Umbraco field with values of the kinds in <paramref name="sample"/>: the fields the first
+    /// document with these values adds to the index.
+    /// </summary>
+    internal static IEnumerable<IndexFieldMapping> FieldMappings(string fieldName, IndexValue sample, ResolvedField resolved)
+        => CreateFieldMappings(new IndexField(fieldName, sample, null, null), resolved);
+
     // The physical fields of one Umbraco field. Texts become four text fields (all levels, then R1 to R3), other values
     // one collection per value type, and each value type gets a single-value "_sort" field when the field is sortable.
     private static IEnumerable<IndexFieldMapping> CreateFieldMappings(IndexField field, ResolvedField resolved)

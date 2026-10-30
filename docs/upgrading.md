@@ -15,6 +15,7 @@ New settings are off or keep today's behavior. A site that changes no configurat
 | `SuggestionAnalyzer` | `PerCulture` | No effect while the mode is `None` |
 | `ZeroDowntimeRebuild` | `false` | Old rebuild behavior |
 | `ClearDocumentCacheOnRebuild` | `false` | A rebuild reuses cached `umbracoIndexDocument` rows, as today |
+| `RebuildBatchSize` | `1` | A rebuild sends one item per request, as today |
 | Spell check | off | No correction |
 | Scoring profiles | none | No `krebil-boosts` while no field has a boost |
 
@@ -100,9 +101,19 @@ The package checks the [index configuration](index-configuration.md#validation) 
 
 With `EnsureIndicesOnStartup()`, the package logs a "Rebuild required" warning at startup for each change that needs a rebuild. See [Definition changes at startup](zero-downtime-rebuild.md#definition-changes-at-startup) for the list. Changes that need no rebuild apply at startup.
 
+Earlier versions logged "Rebuild required" for every existing index, for example "the analyzer of field id is standard.lucene, and the definition sets none", for `id`, `key`, `objectType`, `culture`, `segment` and `accessKeys`. These fields are not searched, so their analyzer does not matter. The package no longer reports them. No rebuild is needed.
+
+## New indexes
+
+A new index now has the Umbraco system fields and the Delivery API index handler fields from the start. See [Fields of a new index](index-definition.md#fields-of-a-new-index). Existing indexes do not change, and no rebuild is needed. The field budget check counts the index handler fields also with automatic fields on.
+
 ## Zero-downtime rebuild
 
 Turning on `ZeroDowntimeRebuild` takes effect at the next rebuild. The first rebuild replaces the plain index with an alias, with a short gap in searches. See [First migration](zero-downtime-rebuild.md#first-migration).
+
+The writes of a zero-downtime rebuild now go to the new index only. Before, they also went to the old index. Publishes and direct calls during a rebuild still go to both indexes. See [Writes during a rebuild](zero-downtime-rebuild.md#writes-during-a-rebuild).
+
+To make a rebuild faster, set [`RebuildBatchSize`](zero-downtime-rebuild.md#batch-size).
 
 After a swap, the package publishes `IndexSwappedNotification`. Use it to clear caches of search results. See [Swap notification](zero-downtime-rebuild.md#swap-notification).
 
