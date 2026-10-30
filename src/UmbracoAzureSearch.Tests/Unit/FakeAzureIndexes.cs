@@ -74,6 +74,23 @@ internal sealed class FakeAzureIndexes
         }
     }
 
+    /// <summary>Adds an index from its JSON, e.g. an index the package built.</summary>
+    public void AddIndexJson(string name, string json)
+    {
+        lock (_lock)
+        {
+            Indexes[name] = JsonNode.Parse(json)!.AsObject();
+        }
+    }
+
+    public JsonNode[] Fields(string index)
+    {
+        lock (_lock)
+        {
+            return Indexes[index]["fields"]!.AsArray().Select(f => f!.DeepClone()).ToArray();
+        }
+    }
+
     public string[] FieldNames(string index)
     {
         lock (_lock)
