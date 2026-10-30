@@ -34,6 +34,9 @@ internal sealed class FakeAzureIndexes
     /// <summary>The uploads Azure rejected because a document has a field the index does not have.</summary>
     public int RejectedUploads { get; private set; }
 
+    /// <summary>The first searches of an index answer a count of 0, as Azure does for documents written a moment ago.</summary>
+    public Dictionary<string, int> StaleCounts { get; } = [];
+
     /// <summary>The searches, per index or alias name.</summary>
     public List<string> Searches { get; } = [];
 
@@ -239,6 +242,12 @@ internal sealed class FakeAzureIndexes
             {
                 Searches.Add(index);
                 var count = Documents.GetValueOrDefault(physical)?.Distinct().Count() ?? 0;
+                if (StaleCounts.GetValueOrDefault(physical) > 0)
+                {
+                    StaleCounts[physical]--;
+                    count = 0;
+                }
+
                 return FakeSearchService.Json($$"""{"@odata.count":{{count}},"value":[]}""");
             }
 

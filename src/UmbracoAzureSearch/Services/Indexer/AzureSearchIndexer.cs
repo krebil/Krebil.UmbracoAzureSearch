@@ -34,9 +34,6 @@ public class AzureSearchIndexer(
 {
     private readonly ConcurrentDictionary<Type, IContentIndexer> _indexers = new();
 
-    // Index aliases already warned about missing suggestion copies; the indexer is a singleton, so one warning per alias.
-    private readonly ConcurrentDictionary<string, bool> _missingSuggestionCopyWarnings = new(StringComparer.OrdinalIgnoreCase);
-
     public async Task AddOrUpdateAsync(string indexAlias, Guid id, UmbracoObjectTypes objectType,
         IEnumerable<Variation> variations,
         IEnumerable<IndexField> fields, ContentProtection? protection)
@@ -53,7 +50,15 @@ public class AzureSearchIndexer(
             return;
         }
 
-        var rebuildWrite = serviceProvider.GetRequiredService<RebuildWrites>().Current(indexAlias) is not null;
+        var rebuildWrites = serviceProvider.GetRequiredService<RebuildWrites>();
+        var rebuild = rebuildWrites.Current(indexAlias);
+        var rebuildWrite = rebuild is not null;
+        if (!rebuildWrite)
+        {
+            // The rebuild documents that wait in a batch go first, so this write is not overwritten by an older one.
+            await serviceProvider.GetRequiredService<DocumentWriter>().FlushAsync(rebuildWrites.Active(indexAlias)?.Batch);
+        }
+
         var physicalIndexes = serviceProvider.GetRequiredService<PhysicalIndexes>();
         var all = await physicalIndexes.AllAsync(indexAlias, definition);
 
@@ -79,22 +84,22 @@ public class AzureSearchIndexer(
 
         foreach (var target in targets)
         {
-            await WriteAsync(indexAlias, target.Key, definition.For(target.Key.Analyzer), id, objectType, target.ToArray(), fieldList, protection, rebuildWrite);
+            await WriteAsync(indexAlias, target.Key, definition.For(target.Key.Analyzer), id, objectType, target.ToArray(), fieldList, protection, rebuild);
         }
 
         // A culture that is no longer published has documents in its own index, which got nothing to write.
         await DeleteRemovedVariationsAsync(indexAlias, definition, id, all.Except(targets.Select(t => t.Key)), rebuildWrite);
     }
 
-    // The Azure indexes a write goes to, and whether documents of removed variations can be there. A zero-downtime
-    // rebuild only fills the new slot: its own writes go there only, and the new slot starts empty, so they have nothing
-    // to clean up. Other writes during a rebuild go to the old index and the new slot, so the old index stays current
-    // and the new slot misses nothing.
+    // The Azure indexes a write goes to, and whether documents of removed variations can be there. A rebuild starts from
+    // an empty index, so its own writes have nothing to clean up. A zero-downtime rebuild only fills the new slot: its own
+    // writes go there only. Other writes during a rebuild go to the old index and the new slot, so the old index stays
+    // current and the new slot misses nothing.
     private async Task<(string Name, bool Cleanup)[]> TargetsAsync(string name, IndexDefinition definition, bool rebuildWrite)
     {
         var slots = serviceProvider.GetRequiredService<IndexSlots>();
-        if (rebuildWrite && slots.NewSlot(name, definition) is { } newSlot)
-            return [(newSlot, false)];
+        if (rebuildWrite)
+            return [(slots.NewSlot(name, definition) ?? (await slots.WriteTargetsAsync(name, definition))[0], false)];
 
         return (await slots.WriteTargetsAsync(name, definition)).Select(target => (target, true)).ToArray();
     }
@@ -137,10 +142,19 @@ public class AzureSearchIndexer(
         Variation[] variations,
         IReadOnlyCollection<IndexField> fields,
         ContentProtection? protection,
-        bool rebuildWrite)
+        RebuildFlow? rebuild)
     {
-        foreach (var (target, cleanup) in await TargetsAsync(physicalIndex.Name, definition, rebuildWrite))
+        foreach (var (target, cleanup) in await TargetsAsync(physicalIndex.Name, definition, rebuild is not null))
         {
+            if (rebuild?.Batch is { } batch)
+            {
+                // A batched rebuild write waits in the batch of its index; RebuildBatchSize documents go in one request.
+                var mappingResult = documentMapper.MapToDocuments(id, objectType, variations, fields, protection, definition);
+                await serviceProvider.GetRequiredService<DocumentWriter>().AddAsync(
+                    batch, physicalIndex with { Name = target }, indexAlias, definition, mappingResult.Documents, mappingResult.FieldMappings);
+                continue;
+            }
+
             await WriteToIndexAsync(indexAlias, physicalIndex with { Name = target }, definition, id, objectType, variations, fields, protection, cleanup);
         }
     }
@@ -161,7 +175,8 @@ public class AzureSearchIndexer(
         var mappingResult = documentMapper.MapToDocuments(id, objectType, variations, fields, protection, definition);
 
         logger.LogDebug("Indexing {DocumentCount} document(s) for {Id} into {IndexAlias} ({IndexName})", mappingResult.Documents.Count, id, indexAlias, physicalIndex.Name);
-        var results = await UploadAsync(physicalIndex, indexAlias, definition, mappingResult.Documents, mappingResult.FieldMappings);
+        var results = await serviceProvider.GetRequiredService<DocumentWriter>()
+            .UploadAsync(physicalIndex, indexAlias, definition, mappingResult.Documents, mappingResult.FieldMappings);
         var failed = results.Where(r => !r.Succeeded).ToList();
         if (failed.Count > 0)
         {
@@ -187,31 +202,6 @@ public class AzureSearchIndexer(
                 // The upload succeeded, so the content is indexed. The next reindex cleans up again.
                 logger.LogWarning(ex, "Failed to delete documents of removed variations for {Id} from {IndexAlias}", id, indexAlias);
             }
-        }
-    }
-
-    // Adds the fields the documents need, then uploads them. Upload replaces the whole document. A merge would keep fields
-    // that the content no longer has, so a cleared value would stay searchable.
-    private async Task<IReadOnlyList<IndexingResult>> UploadAsync(
-        PhysicalIndex physicalIndex, string indexAlias, IndexDefinition definition, List<SearchDocument> documents, List<IndexFieldMapping> fieldMappings)
-    {
-        var searchClient = azureSearchClientFactory.GetSearchIndexClient().GetSearchClient(physicalIndex.Name);
-        var writer = serviceProvider.GetRequiredService<DocumentWriter>();
-        var (indexFields, known) = await EnsureFieldsExist(physicalIndex, indexAlias, fieldMappings, documents, definition);
-        DropMissingSuggestionCopies(physicalIndex.Name, documents, indexFields);
-        var actions = documents.Select(IndexDocumentsAction.Upload).ToArray();
-        try
-        {
-            return await writer.SendAsync(searchClient, actions);
-        }
-        catch (RequestFailedException ex) when (ex.Status == 400 && known)
-        {
-            // The known field names were out of date: another server created the index again without a field. Read the
-            // schema, add the field, and write once more.
-            logger.LogDebug(ex, "Azure rejected a write to {IndexName}. Reading the schema again", physicalIndex.Name);
-            serviceProvider.GetRequiredService<IndexSchemaUpdates>().Forget(physicalIndex.Name);
-            await EnsureFieldsExist(physicalIndex, indexAlias, fieldMappings, documents, definition);
-            return await writer.SendAsync(searchClient, actions);
         }
     }
 
@@ -246,7 +236,7 @@ public class AzureSearchIndexer(
             return;
 
         logger.LogDebug("Deleting {DocumentCount} document(s) of removed variations for {Id} from {IndexAlias}", removedIds.Count, id, indexAlias);
-        var deleteResults = await DeleteDocumentsAsync(searchClient, removedIds);
+        var deleteResults = await serviceProvider.GetRequiredService<DocumentWriter>().DeleteAsync(searchClient, removedIds);
         foreach (var failure in deleteResults.Where(r => !r.Succeeded))
         {
             logger.LogError(
@@ -254,10 +244,6 @@ public class AzureSearchIndexer(
                 failure.Key, id, indexAlias, failure.Status, failure.ErrorMessage);
         }
     }
-
-    private Task<IReadOnlyList<IndexingResult>> DeleteDocumentsAsync(SearchClient searchClient, IEnumerable<string> documentIds)
-        => serviceProvider.GetRequiredService<DocumentWriter>().SendAsync(searchClient,
-            documentIds.Select(documentId => IndexDocumentsAction.Delete(new SearchDocument { [IndexConstants.FieldNames.Id] = documentId })).ToArray());
 
     private bool InContentTypeScope(IndexDefinition definition, UmbracoObjectTypes objectType, IReadOnlyCollection<IndexField> fields)
     {
@@ -319,80 +305,6 @@ public class AzureSearchIndexer(
         static string Identifier(IndexField field) => $"{field.FieldName}|{field.Culture}|{field.Segment}";
     }
 
-    // Adds the fields the documents need and the index lacks. Returns the field names of the index, and true when they
-    // came from memory without a read.
-    private async Task<(IReadOnlySet<string> Fields, bool Known)> EnsureFieldsExist(
-        PhysicalIndex physicalIndex, string indexAlias, List<IndexFieldMapping> fieldMappings, IEnumerable<SearchDocument> documents, IndexDefinition definition)
-    {
-        var indexName = physicalIndex.Name;
-        var schema = serviceProvider.GetRequiredService<IndexSchemaUpdates>();
-
-        // A suggestion copy the index lacks is dropped from the documents, not added (see DropMissingSuggestionCopies).
-        var needed = documents.SelectMany(d => d.Keys).Concat(fieldMappings.Select(m => m.FieldName))
-            .Where(name => !name.StartsWith($"{IndexConstants.FieldNames.Suggestion}_", StringComparison.Ordinal))
-            .ToHashSet(StringComparer.Ordinal);
-        bool HasAll(IReadOnlySet<string> fields) => needed.All(fields.Contains);
-        if (schema.KnownFields(indexName) is { } known && HasAll(known))
-            return (known, true);
-
-        var fields = await schema.UpdateAsync(
-            indexName,
-            index =>
-            {
-                // The per-culture aggregate copies of a culture added to the definition
-                var changed = IndexSchema.AddMissingCopies(index, definition);
-                var currentFieldNames = index.Fields.Select(f => f.Name).ToHashSet();
-
-                // Find missing fields, and add them to the index schema using metadata from field mappings
-                foreach (var mapping in fieldMappings.Where(m => !currentFieldNames.Contains(m.FieldName)).DistinctBy(m => m.FieldName))
-                {
-                    index.Fields.Add(IndexSchema.CreateField(mapping));
-                    currentFieldNames.Add(mapping.FieldName);
-                    changed = true;
-                }
-
-                return changed;
-            },
-            definition.IndexPerCulture
-                ? async () =>
-                {
-                    // The fallback index of IndexPerCulture, for the first document of a language outside the map.
-                    logger.LogWarning("Creating index {IndexName} for a culture outside the culture map. Rebuild the index to fill it with existing content.", indexName);
-                    var profiles = await serviceProvider.GetRequiredService<ScoringProfileSources>().GetAsync(indexAlias);
-                    return IndexSchema.BuildNew(physicalIndex, indexAlias, definition.WithProviderProfiles(profiles));
-                }
-                : null,
-            HasAll);
-        return (fields, false);
-    }
-
-    // Azure adds fields to a suggester only when it creates the suggester, so a suggestion copy of a culture added
-    // after the index was created waits for a rebuild. Writing it before would fail the whole document.
-    private void DropMissingSuggestionCopies(string indexName, List<SearchDocument> documents, IReadOnlySet<string> indexFields)
-    {
-        var prefix = $"{IndexConstants.FieldNames.Suggestion}_";
-        var missing = documents.SelectMany(d => d.Keys)
-            .Where(k => k.StartsWith(prefix, StringComparison.Ordinal) && !indexFields.Contains(k))
-            .ToHashSet();
-        if (missing.Count == 0)
-            return;
-
-        foreach (var document in documents)
-        {
-            foreach (var key in missing)
-            {
-                document.Remove(key);
-            }
-        }
-
-        if (_missingSuggestionCopyWarnings.TryAdd(indexName, true))
-        {
-            logger.LogWarning(
-                "Index {IndexName} has no suggestion fields {Fields}. Rebuild the index to add them.",
-                indexName, string.Join(", ", missing.Order()));
-        }
-    }
-
     public async Task DeleteAsync(string indexAlias, IEnumerable<Guid> ids)
     {
         if (ShouldNotManipulateIndexes())
@@ -400,7 +312,11 @@ public class AzureSearchIndexer(
 
         var definition = new IndexDefinition(azureSearchIndexOptions.Get(indexAlias));
         var idList = ids.ToArray();
-        var rebuildWrite = serviceProvider.GetRequiredService<RebuildWrites>().Current(indexAlias) is not null;
+        var rebuildWrites = serviceProvider.GetRequiredService<RebuildWrites>();
+        var rebuildWrite = rebuildWrites.Current(indexAlias) is not null;
+
+        // The rebuild documents that wait in a batch go first, so the delete removes them too.
+        await serviceProvider.GetRequiredService<DocumentWriter>().FlushAsync(rebuildWrites.Active(indexAlias)?.Batch);
         foreach (var physicalIndex in await serviceProvider.GetRequiredService<PhysicalIndexes>().AllAsync(indexAlias, definition))
         {
             foreach (var (target, _) in await TargetsAsync(physicalIndex.Name, definition, rebuildWrite))
@@ -448,7 +364,7 @@ public class AzureSearchIndexer(
         if (documentIds.Any())
         {
             logger.LogDebug("Deleting {DocumentCount} document(s) from {IndexAlias} for ids {Ids}", documentIds.Count, indexAlias, ids);
-            var deleteResults = await DeleteDocumentsAsync(searchClient, documentIds);
+            var deleteResults = await serviceProvider.GetRequiredService<DocumentWriter>().DeleteAsync(searchClient, documentIds);
             var failedDeletes = deleteResults.Where(r => !r.Succeeded).ToList();
             if (failedDeletes.Count > 0)
             {
@@ -469,7 +385,7 @@ public class AzureSearchIndexer(
         if (ShouldNotManipulateIndexes())
             return Task.CompletedTask;
 
-        serviceProvider.GetRequiredService<RebuildWrites>().Begin(indexAlias);
+        serviceProvider.GetRequiredService<RebuildWrites>().Begin(indexAlias, azureSearchIndexOptions.Get(indexAlias).RebuildBatchSize);
         return azureSearchIndexManager.ResetAsync(indexAlias);
     }
 

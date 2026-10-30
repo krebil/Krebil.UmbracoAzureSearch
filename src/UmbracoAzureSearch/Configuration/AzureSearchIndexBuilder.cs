@@ -48,6 +48,13 @@ public sealed class AzureSearchIndexBuilder
         return this;
     }
 
+    /// <summary>Sets how a rebuild runs, without zero-downtime rebuild, e.g. <c>Rebuild(r =&gt; r.BatchSize(500))</c>.</summary>
+    public AzureSearchIndexBuilder Rebuild(Action<AzureSearchRebuildBuilder> configure)
+    {
+        configure(new AzureSearchRebuildBuilder(_options));
+        return this;
+    }
+
     /// <summary>A rebuild clears the cached umbracoIndexDocument rows. Same as <c>ClearDocumentCacheOnRebuild</c>.</summary>
     public AzureSearchIndexBuilder ClearDocumentCacheOnRebuild(bool clear = true)
     {
@@ -196,7 +203,7 @@ public sealed class AzureSearchFieldBuilder
     }
 }
 
-/// <summary>Sets the zero-downtime rebuild of one index.</summary>
+/// <summary>Sets the rebuild of one index.</summary>
 public sealed class AzureSearchRebuildBuilder
 {
     private readonly AzureSearchIndexOptions _options;
@@ -207,6 +214,16 @@ public sealed class AzureSearchRebuildBuilder
     public AzureSearchRebuildBuilder MinimumDocumentPercent(int percent)
     {
         _options.RebuildMinimumDocumentPercent = percent;
+        return this;
+    }
+
+    /// <summary>
+    /// Sends the writes of a rebuild in requests of this many documents, 1 to 1000. 1 sends each item at once. Same as
+    /// <c>RebuildBatchSize</c>.
+    /// </summary>
+    public AzureSearchRebuildBuilder BatchSize(int documents)
+    {
+        _options.RebuildBatchSize = documents;
         return this;
     }
 

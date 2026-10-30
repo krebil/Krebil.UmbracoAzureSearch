@@ -14,7 +14,8 @@ using UmbracoAzureSearch.Services.IndexManager;
 namespace UmbracoAzureSearch.NotificationHandlers;
 
 /// <summary>
-/// Ends a zero-downtime rebuild: moves the alias to the new slot when the rebuild succeeded, or deletes the new slot.
+/// Ends a rebuild: sends the rest of a batched rebuild. For a zero-downtime rebuild it then moves the alias to the new slot
+/// when the rebuild succeeded, or deletes the new slot.
 /// Umbraco Search publishes the completed notification also for a cancelled rebuild, so the token decides; a rebuild that
 /// throws publishes nothing, and the next rebuild or the next startup cleans up.
 /// </summary>
@@ -22,6 +23,7 @@ internal sealed class ZeroDowntimeRebuildHandler(
     IndexSlots slots,
     IndexSchemaUpdates schemaUpdates,
     RebuildWrites rebuildWrites,
+    DocumentWriter documentWriter,
     IAzureSearchClientFactory azureSearchClientFactory,
     IOptionsMonitor<AzureSearchIndexOptions> azureSearchIndexOptions,
     IEventAggregator eventAggregator,
@@ -31,23 +33,45 @@ internal sealed class ZeroDowntimeRebuildHandler(
     public async Task HandleAsync(IndexRebuildCompletedNotification notification, CancellationToken cancellationToken)
     {
         var indexAlias = notification.IndexAlias;
-
-        // Writes from now on are not rebuild writes, also for an index without zero-downtime rebuild.
-        rebuildWrites.End(indexAlias);
+        var batch = rebuildWrites.Active(indexAlias)?.Batch;
         var rebuilds = slots.Take(indexAlias);
         if (rebuilds.Length == 0)
+        {
+            // An index without zero-downtime rebuild: the index is live, so the rest of the batch goes also after a cancel.
+            await EndAsync(indexAlias, batch, cancellationToken.IsCancellationRequested);
             return;
+        }
 
         if (cancellationToken.IsCancellationRequested)
         {
-            await SkipAsync(indexAlias, rebuilds, "the rebuild was cancelled", []);
+            // No swap happens, so the documents that wait in the batch are dropped with the new slot.
+            var dropped = await DocumentWriter.DropAsync(batch);
+            rebuildWrites.End(indexAlias);
+            await SkipAsync(indexAlias, rebuilds, dropped > 0 ? $"the rebuild was cancelled ({dropped} batched documents not sent)" : "the rebuild was cancelled", []);
             return;
         }
+
+        // The rest of the batch goes before the count check, so the count sees it.
+        try
+        {
+            await documentWriter.FlushAsync(batch);
+        }
+        catch (Exception exception)
+        {
+            rebuildWrites.End(indexAlias);
+            await SkipAsync(indexAlias, rebuilds, $"the last batch failed: {exception.Message}", []);
+            return;
+        }
+
+        // Writes from now on are not rebuild writes.
+        rebuildWrites.End(indexAlias);
 
         var options = azureSearchIndexOptions.Get(indexAlias);
         (SlotRebuild Rebuild, long OldCount, long NewCount)[] counts;
         try
         {
+            // Azure counts a document about a second after the write, so the count waits for the last batch.
+            await Task.WhenAll(rebuilds.Select(rebuild => documentWriter.WaitUntilSearchableAsync(batch, rebuild.New, CountAsync)));
             counts = await Task.WhenAll(rebuilds.Select(async rebuild => (
                 rebuild,
                 rebuild.Old is null ? 0 : await CountAsync(rebuild.Old),
@@ -110,6 +134,24 @@ internal sealed class ZeroDowntimeRebuildHandler(
             await Task.Delay(delay);
             await DeleteOldAsync(indexAlias, oldIndexes);
         });
+    }
+
+    // Ends the rebuild of an index without zero-downtime rebuild: the rest of the batch goes to the live index.
+    private async Task EndAsync(string indexAlias, RebuildBatch? batch, bool cancelled)
+    {
+        try
+        {
+            await documentWriter.FlushAsync(batch);
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "The last batch of the rebuild of {IndexAlias} failed{Cancelled}. Rebuild the index again", indexAlias, cancelled ? " after a cancel" : string.Empty);
+        }
+        finally
+        {
+            // Writes from now on are not rebuild writes.
+            rebuildWrites.End(indexAlias);
+        }
     }
 
     // The swap is done, so a failing handler must not stop the delete of the old indexes.
