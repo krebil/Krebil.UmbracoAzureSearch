@@ -88,6 +88,9 @@ internal sealed class IndexSlots(IAzureSearchClientFactory azureSearchClientFact
 
     public void Start(string indexAlias, SlotRebuild[] rebuilds) => _rebuilds[indexAlias] = rebuilds;
 
+    /// <summary>The slots of the rebuild of an alias, or an empty array when none runs. The rebuild goes on.</summary>
+    public SlotRebuild[] Running(string indexAlias) => _rebuilds.TryGetValue(indexAlias, out var rebuilds) ? rebuilds : [];
+
     /// <summary>Ends the rebuild of an alias and returns its slots, or an empty array when none runs.</summary>
     public SlotRebuild[] Take(string indexAlias) => _rebuilds.TryRemove(indexAlias, out var rebuilds) ? rebuilds : [];
 }

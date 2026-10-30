@@ -55,8 +55,7 @@ public class AzureSearchIndexer(
         var rebuildWrite = rebuild is not null;
         if (!rebuildWrite)
         {
-            // The rebuild documents that wait in a batch go first, so this write is not overwritten by an older one.
-            await serviceProvider.GetRequiredService<DocumentWriter>().FlushAsync(rebuildWrites.Active(indexAlias)?.Batch);
+            await FlushRebuildBatchAsync(rebuildWrites, indexAlias);
         }
 
         var physicalIndexes = serviceProvider.GetRequiredService<PhysicalIndexes>();
@@ -89,6 +88,23 @@ public class AzureSearchIndexer(
 
         // A culture that is no longer published has documents in its own index, which got nothing to write.
         await DeleteRemovedVariationsAsync(indexAlias, definition, id, all.Except(targets.Select(t => t.Key)), rebuildWrite);
+    }
+
+    // The rebuild documents that wait in a batch go before a write or delete from outside the rebuild, so the change is
+    // not followed by an older document of the same item. A batch that fails here, for example of a rebuild that threw
+    // and left its batch behind, must not fail the change: the rebuild fails or is run again.
+    private async Task FlushRebuildBatchAsync(RebuildWrites rebuildWrites, string indexAlias)
+    {
+        var batch = rebuildWrites.Active(indexAlias)?.Batch;
+        try
+        {
+            await serviceProvider.GetRequiredService<DocumentWriter>().FlushAsync(batch);
+        }
+        catch (Exception exception)
+        {
+            var dropped = await DocumentWriter.DropAsync(batch);
+            logger.LogWarning(exception, "Could not send the waiting rebuild documents of {IndexAlias}. Dropped {DocumentCount} document(s). Rebuild the index again", indexAlias, dropped);
+        }
     }
 
     // The Azure indexes a write goes to, and whether documents of removed variations can be there. A rebuild starts from
@@ -315,8 +331,10 @@ public class AzureSearchIndexer(
         var rebuildWrites = serviceProvider.GetRequiredService<RebuildWrites>();
         var rebuildWrite = rebuildWrites.Current(indexAlias) is not null;
 
-        // The rebuild documents that wait in a batch go first, so the delete removes them too.
-        await serviceProvider.GetRequiredService<DocumentWriter>().FlushAsync(rebuildWrites.Active(indexAlias)?.Batch);
+        if (!rebuildWrite)
+        {
+            await FlushRebuildBatchAsync(rebuildWrites, indexAlias);
+        }
         foreach (var physicalIndex in await serviceProvider.GetRequiredService<PhysicalIndexes>().AllAsync(indexAlias, definition))
         {
             foreach (var (target, _) in await TargetsAsync(physicalIndex.Name, definition, rebuildWrite))

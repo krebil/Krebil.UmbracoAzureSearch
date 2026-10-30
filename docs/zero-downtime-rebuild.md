@@ -88,7 +88,7 @@ Example: on a Basic service a zero-downtime rebuild of about 19,000 documents wi
 | The rebuild is cancelled (zero-downtime rebuild) | The package drops the rest with the new index. No swap happens. |
 | The rebuild is cancelled (no zero-downtime rebuild) | The package sends the rest. The index is live. |
 | The application stops during the rebuild | The rest is lost with the half-built index, which the next startup deletes. |
-| A publish or delete during the rebuild | The package first sends the documents that wait, then writes the change at once. An older rebuild document never overwrites the change. |
+| A publish or delete during the rebuild | The package first sends the documents that wait, then writes the change at once. A waiting rebuild document of the same item does not overwrite the change. |
 | Azure rejects a document in a request | The package logs the document key and Azure's message at Error. The other documents count as written. |
 | Azure rejects a whole request (400, 413 request too large, other 4xx) | The package sends the request in two halves, down to single documents. A document that still fails alone is logged at Error and left out. The rebuild goes on. |
 | Azure throttles the request (429, 503) | The package retries it whole. See [Busy services](#busy-services). |
@@ -104,7 +104,7 @@ A Basic service has little capacity. During a rebuild it can answer with 503 ("n
 - Throttled writes (429, 503): the Azure SDK retries 3 times within a few seconds. Then the package sends the request, or the throttled documents of it, again after 2, 4, 8, 16 and 32 seconds. Then the write fails as before. This applies to every write, with and without batches.
 - Schema updates: a document with a new field updates the Azure index. The package runs the schema updates of one Azure index one at a time in each process, each on a fresh read of the schema. When Azure answers 409 ("cannot be updated due to a concurrent operation", or "cannot be updated in 'Updating' state"), for example for an update from another server, the package reads the schema again and retries after 0.5, 1, 2 and 4 seconds. Then the update fails as before.
 - The package keeps the field names of each Azure index in memory. A write whose fields the index already has reads no schema.
-- A new index already has the Umbraco system fields and the Delivery API index handler fields, so the first documents of a rebuild do not update the schema. See [Automatic fields](index-definition.md#automatic-fields).
+- A new index already has the Umbraco system fields and the Delivery API index handler fields, so the first documents of a rebuild do not update the schema. See [Fields of a new index](index-definition.md#fields-of-a-new-index).
 
 ## Count check
 

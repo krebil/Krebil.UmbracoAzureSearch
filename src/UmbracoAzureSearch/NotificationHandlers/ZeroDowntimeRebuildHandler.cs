@@ -34,7 +34,9 @@ internal sealed class ZeroDowntimeRebuildHandler(
     {
         var indexAlias = notification.IndexAlias;
         var batch = rebuildWrites.Active(indexAlias)?.Batch;
-        var rebuilds = slots.Take(indexAlias);
+        // The rebuild stays in progress until the rest of the batch is written and counted, so a publish in that time
+        // still goes to both slots.
+        var rebuilds = slots.Running(indexAlias);
         if (rebuilds.Length == 0)
         {
             // An index without zero-downtime rebuild: the index is live, so the rest of the batch goes also after a cancel.
@@ -46,32 +48,35 @@ internal sealed class ZeroDowntimeRebuildHandler(
         {
             // No swap happens, so the documents that wait in the batch are dropped with the new slot.
             var dropped = await DocumentWriter.DropAsync(batch);
+            slots.Take(indexAlias);
             rebuildWrites.End(indexAlias);
             await SkipAsync(indexAlias, rebuilds, dropped > 0 ? $"the rebuild was cancelled ({dropped} batched documents not sent)" : "the rebuild was cancelled", []);
             return;
         }
 
-        // The rest of the batch goes before the count check, so the count sees it.
+        // The rest of the batch goes before the count check. Azure counts a document about a second after the write, so
+        // the count waits for the last batch.
         try
         {
             await documentWriter.FlushAsync(batch);
+            await Task.WhenAll(rebuilds.Select(rebuild => documentWriter.WaitUntilSearchableAsync(batch, rebuild.New, CountAsync)));
         }
         catch (Exception exception)
         {
+            slots.Take(indexAlias);
             rebuildWrites.End(indexAlias);
             await SkipAsync(indexAlias, rebuilds, $"the last batch failed: {exception.Message}", []);
             return;
         }
 
-        // Writes from now on are not rebuild writes.
+        // Writes from now on are not rebuild writes, and go to the live index only.
+        slots.Take(indexAlias);
         rebuildWrites.End(indexAlias);
 
         var options = azureSearchIndexOptions.Get(indexAlias);
         (SlotRebuild Rebuild, long OldCount, long NewCount)[] counts;
         try
         {
-            // Azure counts a document about a second after the write, so the count waits for the last batch.
-            await Task.WhenAll(rebuilds.Select(rebuild => documentWriter.WaitUntilSearchableAsync(batch, rebuild.New, CountAsync)));
             counts = await Task.WhenAll(rebuilds.Select(async rebuild => (
                 rebuild,
                 rebuild.Old is null ? 0 : await CountAsync(rebuild.Old),
