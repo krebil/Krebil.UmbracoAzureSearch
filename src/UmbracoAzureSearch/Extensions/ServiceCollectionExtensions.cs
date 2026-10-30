@@ -55,6 +55,7 @@ public static class ServiceCollectionExtensions
             .AddSingleton<IndexFieldNames>()
             .AddSingleton<SpellerState>()
             .AddSingleton<IndexSlots>()
+            .AddSingleton<IndexSchemaUpdates>()
             .AddSingleton<ScoringProfileSources>()
             .AddSingleton<IValidateOptions<AzureSearchIndexOptions>, AzureSearchIndexOptionsValidator>()
             .AddSingleton(sp => new AzureSearchIndexConfigurationSources(
