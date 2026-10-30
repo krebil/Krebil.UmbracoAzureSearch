@@ -24,6 +24,9 @@ public class AzureSearchClientFactory(
     // Lets tests inspect requests without a network.
     internal HttpPipelineTransport? Transport { get; set; }
 
+    // Lets tests turn off the retries of the Azure SDK, which wait seconds on a 503.
+    internal int? MaxRetries { get; set; }
+
     public SearchIndexClient GetSearchIndexClient()
         => LazyInitializer.EnsureInitialized(ref _searchIndexClient, CreateSearchIndexClient);
 
@@ -41,6 +44,11 @@ public class AzureSearchClientFactory(
         if (Transport is not null)
         {
             options.Transport = Transport;
+        }
+
+        if (MaxRetries is { } maxRetries)
+        {
+            options.Retry.MaxRetries = maxRetries;
         }
 
         // A credential passed in code wins over a configured key.

@@ -19,6 +19,9 @@ internal sealed class AzureSearchIndexOptionsValidator(IOptions<UmbracoAzureSear
     // The Umbraco system fields: ten keyword, number or date fields with a sortable copy, and Umb_Name with four text fields and a sortable copy.
     internal const int SystemFieldCount = 25;
 
+    // Azure takes at most 1000 documents per index request.
+    internal const int MaxBatchSize = 1000;
+
     private static readonly HashSet<string> BackofficeIndexes = new(StringComparer.OrdinalIgnoreCase)
     {
         Umbraco.Cms.Search.Core.Constants.IndexAliases.DraftContent,
@@ -71,6 +74,11 @@ internal sealed class AzureSearchIndexOptionsValidator(IOptions<UmbracoAzureSear
         if (options.RebuildMinimumDocumentPercent is < 0 or > 100)
         {
             failures.Add($"RebuildMinimumDocumentPercent is {options.RebuildMinimumDocumentPercent}. Use 0 to 100; 0 turns the count check off.");
+        }
+
+        if (options.RebuildBatchSize is < 1 or > MaxBatchSize)
+        {
+            failures.Add($"RebuildBatchSize is {options.RebuildBatchSize}. Use 1 to {MaxBatchSize}; 1 sends each item at once.");
         }
 
         if (options.RebuildDeleteDelaySeconds < 0)
@@ -160,7 +168,7 @@ internal sealed class AzureSearchIndexOptionsValidator(IOptions<UmbracoAzureSear
            || ((analyzer.EndsWith(".microsoft", StringComparison.OrdinalIgnoreCase) || analyzer.EndsWith(".lucene", StringComparison.OrdinalIgnoreCase))
                && !string.Equals(analyzer, LexicalAnalyzerName.StandardAsciiFoldingLucene.ToString(), StringComparison.OrdinalIgnoreCase));
 
-    // The fixed fields, the suggestion fields and the per-culture copies. With automatic fields off, also the opted-in
+    // The fixed fields, the suggestion fields, the per-culture copies and the index handler fields. With automatic fields off, also the opted-in
     // fields: a searchable field has four text fields, a filterable or facetable field one value field, and a sortable
     // field one sort field.
     internal static int CountFields(AzureSearchIndexOptions options, IndexDefinition definition)
@@ -168,6 +176,13 @@ internal sealed class AzureSearchIndexOptionsValidator(IOptions<UmbracoAzureSear
         var count = BaseFieldCount + SystemFieldCount
                     + IndexSchema.SuggestionFields(definition).Count()
                     + IndexSchema.CopyFields(definition).Count();
+        // An index handler field has the automatic attributes: a text is searchable (4), filterable (1) and sortable (1);
+        // other values are filterable and facetable (1) and sortable (1). A new index has them from the start.
+        foreach (var fieldType in options.IndexHandlerFields.Where(f => !options.Fields.ContainsKey(f.Key) && !IndexDefinition.IsSystemField(f.Key)).Select(f => f.Value))
+        {
+            count += fieldType is Umbraco.Cms.Core.DeliveryApi.FieldType.StringAnalyzed or Umbraco.Cms.Core.DeliveryApi.FieldType.StringSortable ? 6 : 2;
+        }
+
         if (options.AutomaticFields)
             return count;
 
@@ -177,13 +192,6 @@ internal sealed class AzureSearchIndexOptionsValidator(IOptions<UmbracoAzureSear
             count += (field.Searchable ? 4 : 0)
                      + (field.Filterable || field.Facetable ? 1 : 0)
                      + (field.Sortable ? 1 : 0);
-        }
-
-        // An index handler field has the automatic attributes: a text is searchable (4), filterable (1) and sortable (1);
-        // other values are filterable and facetable (1) and sortable (1).
-        foreach (var fieldType in options.IndexHandlerFields.Where(f => !options.Fields.ContainsKey(f.Key) && !IndexDefinition.IsSystemField(f.Key)).Select(f => f.Value))
-        {
-            count += fieldType is Umbraco.Cms.Core.DeliveryApi.FieldType.StringAnalyzed or Umbraco.Cms.Core.DeliveryApi.FieldType.StringSortable ? 6 : 2;
         }
 
         return count;

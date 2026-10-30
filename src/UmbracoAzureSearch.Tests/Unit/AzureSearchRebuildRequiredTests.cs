@@ -64,6 +64,34 @@ public class AzureSearchRebuildRequiredTests
         Assert.That(messages, Is.Empty);
     }
 
+    // Azure makes a string field searchable when the request leaves "searchable" out, and older package versions did
+    // so for the key and filter fields. Their analyzer does not matter, so they need no rebuild.
+    [TestCase(null)]
+    [TestCase("standard.lucene")]
+    public async Task ReportsNothingForAnAnalyzerOnAKeyOrFilterField(string? analyzer)
+    {
+        var json = JsonNode.Parse(ExistingIndex())!;
+        foreach (var field in json["fields"]!.AsArray().Where(f => f!["name"]!.GetValue<string>() is "id" or "key" or "objectType" or "culture" or "segment" or "accessKeys"))
+        {
+            field!["searchable"] = true;
+            field["analyzer"] = analyzer;
+        }
+
+        var messages = await RebuildRequiredAsync(_ => { }, json.ToJsonString());
+
+        Assert.That(messages, Is.Empty);
+    }
+
+    [Test]
+    public async Task ReportsANewAnalyzerOnASearchableFieldOfTheDefinition()
+    {
+        var messages = await RebuildRequiredAsync(
+            index => index.ConfigureIndex(searchIndex => searchIndex.Fields.Single(f => f.Name == "allTexts").AnalyzerName = LexicalAnalyzerName.EnMicrosoft),
+            ExistingIndex());
+
+        Assert.That(messages, Has.One.Contains("the analyzer of field allTexts is standard.lucene, and the definition sets en.microsoft"));
+    }
+
     [Test]
     public async Task ReportsANewAnalyzerOnAnExistingField()
     {

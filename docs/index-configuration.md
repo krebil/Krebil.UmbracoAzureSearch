@@ -60,6 +60,7 @@ Content types, cultures, per-index indexers and the `ConfigureIndex` and `Config
 | Zero-downtime rebuild | `ZeroDowntimeRebuild` | `.ZeroDowntimeRebuild()` | `false` | Takes effect at the next rebuild | [Zero-downtime rebuild](zero-downtime-rebuild.md) |
 | Count check before the swap | `RebuildMinimumDocumentPercent` | `.ZeroDowntimeRebuild(r => r.MinimumDocumentPercent(50))` | `50` | No | [Zero-downtime rebuild](zero-downtime-rebuild.md#count-check) |
 | Wait before the delete | `RebuildDeleteDelaySeconds` | `.ZeroDowntimeRebuild(r => r.DeleteDelay(...))` | `10` | No | [Zero-downtime rebuild](zero-downtime-rebuild.md#wait-before-delete) |
+| Documents per rebuild request | `RebuildBatchSize` | `.Rebuild(r => r.BatchSize(500))` or `.ZeroDowntimeRebuild(r => r.BatchSize(500))` | `1` | No | [Zero-downtime rebuild](zero-downtime-rebuild.md#batch-size) |
 | Clear the document cache on rebuild | `ClearDocumentCacheOnRebuild` | `.ClearDocumentCacheOnRebuild()` | `false` | No | [Zero-downtime rebuild](zero-downtime-rebuild.md#cleardocumentcacheonrebuild) |
 | Default scoring profile | `DefaultScoringProfile` | `.DefaultScoringProfile(name)` | `umbraco-boosts` with boosts, otherwise `relevanceBoost` | No | [Scoring profiles](scoring-profiles.md#default-profile) |
 | Spell check per culture | `SpellCheck:Cultures:<culture>` | `.SpellCheck(s => s.Culture("en", ...))` | Off | No | [Spell check](spell-check.md) |
@@ -90,6 +91,7 @@ The package checks the configuration when the application starts. An error stops
 
 | Check | Example error |
 |---|---|
+| `RebuildBatchSize` is 1 to 1000 | `RebuildBatchSize is 0. Use 1 to 1000; 1 sends each item at once.` |
 | The alias is registered with Umbraco Search | `UmbracoAzureSearch:Indexes:Umb_PublishedContnet configures the index "Umb_PublishedContnet", but Umbraco Search does not register an index with that alias. Registered content indexes: Umb_Content, Umb_Media, Umb_Members, Umb_PublishedContent.` |
 
 The [index definition](index-definition.md#validation) adds checks for fields.

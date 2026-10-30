@@ -48,6 +48,11 @@ public class AzureSearchZeroDowntimeRebuildTests
         => services.GetServices<INotificationAsyncHandler<IndexRebuildCompletedNotification>>().Single()
             .HandleAsync(new IndexRebuildCompletedNotification(IndexAlias), cancellationToken);
 
+    // Starts a rebuild in its own async flow, so the writes of the test are not rebuild writes but writes during a rebuild,
+    // such as a publish. Rebuild writes are in AzureSearchRebuildWriteTests.
+    private static async Task StartRebuildAsync(IServiceProvider services)
+        => await services.GetRequiredService<IIndexer>().ResetAsync(IndexAlias);
+
     private static Task WriteAsync(IServiceProvider services)
         => services.GetRequiredService<IIndexer>().AddOrUpdateAsync(IndexAlias, Guid.NewGuid(), UmbracoObjectTypes.Document,
             [new Variation(null, null)], [new IndexField("title", new IndexValue { TextsR1 = ["Red boat"] }, null, null)], null);
@@ -111,7 +116,7 @@ public class AzureSearchZeroDowntimeRebuildTests
         azure.Aliases[Name] = SlotA;
         var services = service.CreateServices();
 
-        await services.GetRequiredService<IIndexer>().ResetAsync(IndexAlias);
+        await StartRebuildAsync(services);
         await WriteAsync(services);
         // The write looks up removed variations in both slots; only the search below is checked.
         azure.Searches.Clear();
@@ -121,13 +126,14 @@ public class AzureSearchZeroDowntimeRebuildTests
         {
             Assert.That(azure.Indexes, Is.EquivalentTo(new[] { SlotA, SlotB }));
             Assert.That(azure.Aliases[Name], Is.EqualTo(SlotA), "The alias moves only at the swap.");
-            Assert.That(azure.Writes.Keys, Is.EquivalentTo(new[] { SlotA, SlotB }), "A write during the rebuild goes to both slots.");
+            Assert.That(azure.Writes.Keys, Is.EquivalentTo(new[] { SlotA, SlotB }), "A publish during the rebuild goes to both slots.");
             Assert.That(azure.Searches, Is.EqualTo(new[] { Name }), "Searches use the alias.");
             Assert.That(Messages(service, LogLevel.Information), Has.One.Contains("Rebuild started").And.Contains(SlotB).And.Contains(SlotA));
         });
     }
 
     // The cleanup of a culture the content no longer has must reach the new slot too, or the document returns at the swap.
+    // The new slot can hold the culture when the rebuild wrote the content before the publish.
     [Test]
     public async Task ARebuildCleansUpRemovedCulturesInBothSlots()
     {
@@ -136,7 +142,7 @@ public class AzureSearchZeroDowntimeRebuildTests
         azure.Aliases[Name] = SlotA;
         var services = service.CreateServices();
 
-        await services.GetRequiredService<IIndexer>().ResetAsync(IndexAlias);
+        await StartRebuildAsync(services);
         await services.GetRequiredService<IIndexer>().AddOrUpdateAsync(IndexAlias, Guid.NewGuid(), UmbracoObjectTypes.Document,
             [new Variation("en-US", null)], [new IndexField("title", new IndexValue { TextsR1 = ["Red boat"] }, "en-US", null)], null);
 
@@ -152,7 +158,7 @@ public class AzureSearchZeroDowntimeRebuildTests
         azure.Counts[SlotA] = 100;
         var services = service.CreateServices();
 
-        await services.GetRequiredService<IIndexer>().ResetAsync(IndexAlias);
+        await StartRebuildAsync(services);
         azure.Counts[SlotB] = 98;
         await CompleteAsync(services);
         azure.Writes.Clear();
@@ -184,7 +190,7 @@ public class AzureSearchZeroDowntimeRebuildTests
             indexesAtPublish = azure.Indexes.ToArray();
         };
 
-        await services.GetRequiredService<IIndexer>().ResetAsync(IndexAlias);
+        await StartRebuildAsync(services);
         azure.Counts[SlotB] = 98;
         await CompleteAsync(services);
 
@@ -207,7 +213,7 @@ public class AzureSearchZeroDowntimeRebuildTests
         azure.FailAliasUpdates = true;
         var services = service.CreateServices();
 
-        await services.GetRequiredService<IIndexer>().ResetAsync(IndexAlias);
+        await StartRebuildAsync(services);
 
         Assert.Multiple(() =>
         {
@@ -226,7 +232,7 @@ public class AzureSearchZeroDowntimeRebuildTests
         var services = service.CreateServices();
         service.OnPublish = _ => throw new InvalidOperationException("Handler failed");
 
-        await services.GetRequiredService<IIndexer>().ResetAsync(IndexAlias);
+        await StartRebuildAsync(services);
         await CompleteAsync(services);
 
         Assert.Multiple(() =>
@@ -245,7 +251,7 @@ public class AzureSearchZeroDowntimeRebuildTests
         azure.Aliases[Name] = SlotA;
         var services = service.CreateServices();
 
-        await services.GetRequiredService<IIndexer>().ResetAsync(IndexAlias);
+        await StartRebuildAsync(services);
         await CompleteAsync(services, new CancellationToken(canceled: true));
 
         Assert.Multiple(() =>
@@ -266,7 +272,7 @@ public class AzureSearchZeroDowntimeRebuildTests
         azure.Counts[SlotA] = 100;
         var services = service.CreateServices();
 
-        await services.GetRequiredService<IIndexer>().ResetAsync(IndexAlias);
+        await StartRebuildAsync(services);
         azure.Counts[SlotB] = 49;
         await CompleteAsync(services);
 
@@ -288,7 +294,7 @@ public class AzureSearchZeroDowntimeRebuildTests
         azure.Counts[SlotA] = 100;
         var services = service.CreateServices();
 
-        await services.GetRequiredService<IIndexer>().ResetAsync(IndexAlias);
+        await StartRebuildAsync(services);
         await CompleteAsync(services);
 
         Assert.That(azure.Aliases[Name], Is.EqualTo(SlotB));
@@ -302,7 +308,7 @@ public class AzureSearchZeroDowntimeRebuildTests
         azure.Counts[Name] = 10;
         var services = service.CreateServices();
 
-        await services.GetRequiredService<IIndexer>().ResetAsync(IndexAlias);
+        await StartRebuildAsync(services);
         azure.Counts[SlotA] = 10;
         await CompleteAsync(services);
 
@@ -324,7 +330,7 @@ public class AzureSearchZeroDowntimeRebuildTests
         var services = service.CreateServices();
 
         await services.GetRequiredService<IAzureSearchIndexManager>().EnsureAsync(IndexAlias);
-        await services.GetRequiredService<IIndexer>().ResetAsync(IndexAlias);
+        await StartRebuildAsync(services);
         await CompleteAsync(services);
 
         Assert.Multiple(() =>
@@ -351,7 +357,7 @@ public class AzureSearchZeroDowntimeRebuildTests
         azure.Indexes.Add(Name);
         var services = service.CreateServices();
 
-        await services.GetRequiredService<IIndexer>().ResetAsync(IndexAlias);
+        await StartRebuildAsync(services);
         foreach (var hostedService in services.GetServices<IHostedService>())
         {
             await hostedService.StartAsync(CancellationToken.None);

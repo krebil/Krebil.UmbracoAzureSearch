@@ -27,6 +27,12 @@ public class AzureSearchIndexOptions
     /// </summary>
     public int RebuildMinimumDocumentPercent { get; set; } = 50;
 
+    /// <summary>
+    /// The documents a rebuild sends to Azure in one request, 1 to 1000. 1 (the default) sends each item at once. Only the
+    /// writes of the rebuild are batched; other writes during a rebuild are sent at once.
+    /// </summary>
+    public int RebuildBatchSize { get; set; } = 1;
+
     /// <summary>With <see cref="ZeroDowntimeRebuild"/>, the seconds between the swap and the delete of the old index. 10 by default.</summary>
     public int RebuildDeleteDelaySeconds { get; set; } = 10;
 
