@@ -368,7 +368,7 @@ internal static class IndexSchema
         {
             if (desiredFields.TryGetValue(field.Name, out var wanted))
             {
-                if (AnalyzerOf(field) != AnalyzerOf(wanted))
+                if (AnalyzerChanged(field, wanted))
                     yield return $"the analyzer of field {field.Name} is {AnalyzerOf(field)}, and the definition sets {AnalyzerOf(wanted)}";
                 continue;
             }
@@ -428,6 +428,19 @@ internal static class IndexSchema
 
     private static string AnalyzerOf(SearchField field)
         => field.IsSearchable is true ? field.AnalyzerName?.ToString() ?? LexicalAnalyzerName.StandardLucene.ToString() : "none";
+
+    // Only the analyzer of a field the definition makes searchable matters. Azure makes a string field searchable when
+    // the request leaves "searchable" out, so the key and filter fields of older indexes have standard.lucene: no change.
+    private static bool AnalyzerChanged(SearchField live, SearchField desired)
+    {
+        if (desired.IsSearchable is not true)
+            return false;
+
+        var liveAnalyzer = AnalyzerOf(live);
+        var desiredAnalyzer = AnalyzerOf(desired);
+        return liveAnalyzer != desiredAnalyzer
+               && !(liveAnalyzer == "none" && desiredAnalyzer == LexicalAnalyzerName.StandardLucene.ToString());
+    }
 
     private static bool IsSuggestionField(string name)
         => name == IndexConstants.FieldNames.Suggestion || name.StartsWith($"{IndexConstants.FieldNames.Suggestion}_", StringComparison.Ordinal);
