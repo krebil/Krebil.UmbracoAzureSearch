@@ -1,5 +1,7 @@
 using System.ClientModel.Primitives;
 using Azure.Search.Documents.Indexes.Models;
+using Umbraco.Cms.Core.DeliveryApi;
+using Umbraco.Cms.Search.Core.Models.Indexing;
 using UmbracoAzureSearch.Constants;
 using UmbracoAzureSearch.Models;
 using UmbracoAzureSearch.Services.Indexer;
@@ -469,6 +471,74 @@ internal static class IndexSchema
             IsSearchable = mapping.IsSearchable,
             AnalyzerName = Analyzer(mapping.AnalyzerName),
         };
+
+    // The Umbraco system fields and their values, as Umbraco Search writes them (SystemFieldsContentIndexer).
+    private static readonly (string FieldName, IndexValue Sample)[] SystemFields =
+    [
+        (Umbraco.Cms.Search.Core.Constants.FieldNames.Id, new IndexValue { Keywords = [string.Empty] }),
+        (Umbraco.Cms.Search.Core.Constants.FieldNames.ParentId, new IndexValue { Keywords = [string.Empty] }),
+        (Umbraco.Cms.Search.Core.Constants.FieldNames.PathIds, new IndexValue { Keywords = [string.Empty] }),
+        (Umbraco.Cms.Search.Core.Constants.FieldNames.ContentTypeId, new IndexValue { Keywords = [string.Empty] }),
+        (Umbraco.Cms.Search.Core.Constants.FieldNames.ObjectType, new IndexValue { Keywords = [string.Empty] }),
+        (Umbraco.Cms.Search.Core.Constants.FieldNames.Tags, new IndexValue { Keywords = [string.Empty] }),
+        (Umbraco.Cms.Search.Core.Constants.FieldNames.CreateDate, new IndexValue { DateTimeOffsets = [DateTimeOffset.MinValue] }),
+        (Umbraco.Cms.Search.Core.Constants.FieldNames.UpdateDate, new IndexValue { DateTimeOffsets = [DateTimeOffset.MinValue] }),
+        (Umbraco.Cms.Search.Core.Constants.FieldNames.Level, new IndexValue { Integers = [0] }),
+        (Umbraco.Cms.Search.Core.Constants.FieldNames.SortOrder, new IndexValue { Integers = [0] }),
+        (Umbraco.Cms.Search.Core.Constants.FieldNames.Name, new IndexValue { TextsR1 = ["x"] }),
+    ];
+
+    /// <summary>
+    /// The fields of the Umbraco fields the definition knows before any document: the system fields and the Delivery API
+    /// index handler fields, with the attributes the definition gives them. They are the fields the first document with
+    /// these fields adds. Property fields are left out: their value types depend on the content.
+    /// </summary>
+    public static IEnumerable<SearchField> KnownFields(IndexDefinition definition)
+    {
+        // The Delivery API indexer writes StringRaw as keywords, StringAnalyzed and StringSortable as texts, Number as
+        // decimals and Date as dates (DeliveryApiContentIndexer).
+        var handlerFields = definition.Options.IndexHandlerFields
+            .Where(field => !IndexDefinition.IsSystemField(field.Key))
+            .Select(field => (FieldName: field.Key, Sample: field.Value switch
+            {
+                FieldType.StringRaw => new IndexValue { Keywords = [string.Empty] },
+                FieldType.StringAnalyzed or FieldType.StringSortable => new IndexValue { Texts = ["x"] },
+                FieldType.Number => new IndexValue { Decimals = [0m] },
+                FieldType.Date => new IndexValue { DateTimeOffsets = [DateTimeOffset.MinValue] },
+                _ => null,
+            }))
+            .Where(field => field.Sample is not null)
+            .Select(field => (field.FieldName, field.Sample!));
+
+        foreach (var (fieldName, sample) in SystemFields.Concat(handlerFields))
+        {
+            if (definition.Resolve(fieldName) is not { } resolved)
+                continue;
+
+            foreach (var mapping in DocumentMapper.FieldMappings(fieldName, sample, resolved))
+            {
+                yield return CreateField(mapping);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A new index: <see cref="Build"/> with the <see cref="KnownFields"/>, so the first documents need no schema update.
+    /// Existing indexes do not get the known fields; documents add them as before.
+    /// </summary>
+    public static SearchIndex BuildNew(PhysicalIndex physicalIndex, string indexAlias, IndexDefinition definition)
+    {
+        var index = Build(physicalIndex, indexAlias, definition);
+
+        // A field that ConfigureIndex or a scoring profile added stays as it is, as with documents.
+        var names = index.Fields.Select(f => f.Name).ToHashSet();
+        foreach (var field in KnownFields(definition).Where(f => names.Add(f.Name)))
+        {
+            index.Fields.Add(field);
+        }
+
+        return index;
+    }
 
     // The index definition in code; EnsureAsync, ResetAsync and the indexer create indexes from it.
     public static SearchIndex Build(PhysicalIndex physicalIndex, string indexAlias, IndexDefinition definition, bool runCallbacks = true)

@@ -6,7 +6,6 @@ using Azure.Search.Documents.Models;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Throw;
 using Umbraco.Cms.Core.Models;
 using Umbraco.Cms.Core.Sync;
 using Umbraco.Cms.Search.Core.Configuration;
@@ -327,7 +326,7 @@ public class AzureSearchIndexer(
                     // The fallback index of IndexPerCulture, for the first document of a language outside the map.
                     logger.LogWarning("Creating index {IndexName} for a culture outside the culture map. Rebuild the index to fill it with existing content.", indexName);
                     var profiles = await serviceProvider.GetRequiredService<ScoringProfileSources>().GetAsync(indexAlias);
-                    return IndexSchema.Build(physicalIndex, indexAlias, definition.WithProviderProfiles(profiles));
+                    return IndexSchema.BuildNew(physicalIndex, indexAlias, definition.WithProviderProfiles(profiles));
                 }
                 : null,
             HasAll);

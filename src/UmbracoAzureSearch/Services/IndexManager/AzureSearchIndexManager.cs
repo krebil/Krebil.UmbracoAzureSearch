@@ -73,7 +73,7 @@ public class AzureSearchIndexManager(
 
             // A new index. With zero-downtime rebuild it is slot a behind an alias with the name.
             var newName = slotted ? IndexSlots.Slot(name, 'a') : name;
-            await schemaUpdates.CreateAsync(IndexSchema.Build(physicalIndex with { Name = newName }, indexAlias, physicalDefinition));
+            await schemaUpdates.CreateAsync(IndexSchema.BuildNew(physicalIndex with { Name = newName }, indexAlias, physicalDefinition));
             if (slotted)
             {
                 await searchIndexClient.CreateOrUpdateAliasAsync(new SearchAlias(name, newName));
@@ -152,7 +152,7 @@ public class AzureSearchIndexManager(
 
             // Recreate from code, not from the old definition, so a rebuild also applies schema changes such as
             // suggestions. Property fields come back as the rebuild indexes documents (see EnsureFieldsExist).
-            await schemaUpdates.CreateAsync(IndexSchema.Build(physicalIndex, indexAlias, definition.For(physicalIndex.Analyzer)));
+            await schemaUpdates.CreateAsync(IndexSchema.BuildNew(physicalIndex, indexAlias, definition.For(physicalIndex.Analyzer)));
         }
     }
 
@@ -173,7 +173,7 @@ public class AzureSearchIndexManager(
 
         var newName = IndexSlots.Inactive(name, aliasTarget);
         await DeleteIndexQuietlyAsync(indexClient, newName);
-        await schemaUpdates.CreateAsync(IndexSchema.Build(physicalIndex with { Name = newName }, indexAlias, definition));
+        await schemaUpdates.CreateAsync(IndexSchema.BuildNew(physicalIndex with { Name = newName }, indexAlias, definition));
 
         var started = DateTimeOffset.UtcNow;
         logger.LogInformation(
