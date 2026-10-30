@@ -12,6 +12,7 @@ Defaults:
 | `RebuildMinimumDocumentPercent` | `50` |
 | `RebuildDeleteDelaySeconds` | `10` |
 | `ClearDocumentCacheOnRebuild` | `false` |
+| `RebuildBatchSize` | `1`: one item per request, as before. See [Batch size](#batch-size). |
 
 Needs a rebuild: turning the option on takes effect at the next rebuild. See [First migration](#first-migration).
 
@@ -25,6 +26,7 @@ appsettings:
         "ZeroDowntimeRebuild": true,
         "RebuildMinimumDocumentPercent": 50,
         "RebuildDeleteDelaySeconds": 10,
+        "RebuildBatchSize": 500,
         "ClearDocumentCacheOnRebuild": true
       }
     }
@@ -38,7 +40,8 @@ Code:
 builder.Services.ConfigureAzureSearchIndex("siteSearch", index => index
     .ZeroDowntimeRebuild(r => r
         .MinimumDocumentPercent(50)
-        .DeleteDelay(TimeSpan.FromSeconds(10)))
+        .DeleteDelay(TimeSpan.FromSeconds(10))
+        .BatchSize(500))
     .ClearDocumentCacheOnRebuild());
 ```
 
@@ -50,7 +53,7 @@ When appsettings and code set the same value, code wins.
 |---|---|
 | Names | The index name (for example `umb-publishedcontent`) is an Azure index alias. Two Azure indexes sit behind it: `<name>-a` and `<name>-b`. Searches use the alias. |
 | Start | The rebuild creates the slot the alias does not point to, from the current definition and the [scoring profile sources](scoring-profiles.md#sources-and-merge-order). Profiles added another way are not copied, and the swap log lists them as dropped. |
-| During the rebuild | Searches use the alias, so they find the old index. Every write goes to both indexes. |
+| During the rebuild | Searches use the alias, so they find the old index. The writes of the rebuild go to the new index only. Other writes go to both indexes. See [Writes during a rebuild](#writes-during-a-rebuild). |
 | Swap | When the rebuild completes, the package checks that it was not cancelled and that the count check passes. Then it moves the alias to the new index, publishes [`IndexSwappedNotification`](#swap-notification), waits, and deletes the old index. |
 | Failure | When the rebuild is cancelled, or the count check fails, the alias stays on the old index and the package deletes the new one. A rebuild that throws leaves the new index; the next rebuild or the next startup deletes it. |
 
@@ -60,9 +63,48 @@ At startup (with `EnsureIndicesOnStartup()`), the package deletes a half-built s
 
 ## Writes during a rebuild
 
-Umbraco Search runs a rebuild as one background task. Content changes made during the rebuild wait in the same queue and run after it, so they reach the new index after the swap. A publish during a rebuild shows up in search when the rebuild ends. Nothing is lost.
+Umbraco Search runs a rebuild as one background task: it calls `ResetAsync`, then writes each item, in one async flow. The package marks that flow when `ResetAsync` starts, so it knows the writes of the rebuild from other writes. The mark ends when the rebuild completes.
 
-Direct calls to `IIndexer` or `IAzureSearchIndexer` from your code during a rebuild go to both indexes, so the old index stays current and the new index misses nothing. The rebuild's own writes also go to both indexes, which doubles the indexing work during a rebuild.
+| Write | Goes to | Removed variations |
+|---|---|---|
+| A write or delete of the rebuild | The new index only | Not looked up. The new index starts empty. |
+| A publish, save or delete during the rebuild | Both indexes | Looked up and deleted in both indexes |
+| A direct call to `IIndexer` or `IAzureSearchIndexer` from your code | Both indexes | Looked up and deleted in both indexes |
+
+Content changes made during the rebuild wait in the Umbraco Search queue and run after it, so they reach the new index after the swap. A publish during a rebuild shows up in search when the rebuild ends. Nothing is lost.
+
+Your code runs in its own flow, also when it runs during the rebuild. Its writes go to both indexes, so the old index stays current and the new index misses nothing. Code that runs inside the rebuild flow, for example a `ContentIndexingNotification` handler that calls the indexer, writes as the rebuild does.
+
+## Batch size
+
+Umbraco Search rebuilds one item at a time, so by default each item is one request to Azure. `RebuildBatchSize` sends the writes of a rebuild in requests of that many documents. Use 1 to 1000; Azure takes at most 1000 documents per request. 1 (the default) sends each item at once. The setting also works without zero-downtime rebuild. In code without zero-downtime rebuild, use `.Rebuild(r => r.BatchSize(500))`.
+
+Example: on a Basic service a zero-downtime rebuild of about 19,000 documents with one item per request ran at 110 to 200 documents a minute.
+
+| Case | What happens |
+|---|---|
+| The batch of an Azure index is full | The package sends it. The documents of one item stay in one request. |
+| The rebuild completes | The package sends the rest, before the count check and the swap. The count check waits up to 10 seconds until Azure counts the documents. |
+| The rebuild is cancelled (zero-downtime rebuild) | The package drops the rest with the new index. No swap happens. |
+| The rebuild is cancelled (no zero-downtime rebuild) | The package sends the rest. The index is live. |
+| The application stops during the rebuild | The rest is lost with the half-built index, which the next startup deletes. |
+| A publish or delete during the rebuild | The package first sends the documents that wait, then writes the change at once. An older rebuild document never overwrites the change. |
+| Azure rejects a document in a request | The package logs the document key and Azure's message at Error. The other documents count as written. |
+| Azure rejects a whole request (400, 413 request too large, other 4xx) | The package sends the request in two halves, down to single documents. A document that still fails alone is logged at Error and left out. The rebuild goes on. |
+| Azure throttles the request (429, 503) | The package retries it whole. See [Busy services](#busy-services). |
+
+The fields of all documents of a batch go into one schema update.
+
+Start with 100 to 500. A request can hold at most 16 MB, so large documents need a smaller batch. The package splits a request that is too large, but each split costs a request.
+
+## Busy services
+
+A Basic service has little capacity. During a rebuild it can answer with 503 ("not enough resources to cover 100% of the index"), 429, or 409 for a schema update.
+
+- Throttled writes (429, 503): the Azure SDK retries 3 times within a few seconds. Then the package sends the request, or the throttled documents of it, again after 2, 4, 8, 16 and 32 seconds. Then the write fails as before. This applies to every write, with and without batches.
+- Schema updates: a document with a new field updates the Azure index. The package runs the schema updates of one Azure index one at a time in each process, each on a fresh read of the schema. When Azure answers 409 ("cannot be updated due to a concurrent operation", or "cannot be updated in 'Updating' state"), for example for an update from another server, the package reads the schema again and retries after 0.5, 1, 2 and 4 seconds. Then the update fails as before.
+- The package keeps the field names of each Azure index in memory. A write whose fields the index already has reads no schema.
+- A new index already has the Umbraco system fields and the Delivery API index handler fields, so the first documents of a rebuild do not update the schema. See [Automatic fields](index-definition.md#automatic-fields).
 
 ## Count check
 
@@ -149,6 +191,9 @@ With or without the option, the package compares each existing index with the in
 | Swap skipped | Warning | `Swap skipped for` | `IndexAlias`, `Reason`, `DocumentCounts` |
 | Rebuild required | Warning | `Rebuild required for index` | `IndexAlias`, `Change` |
 | Half-built index deleted | Warning | `Deleted the half-built index` | `NewIndex`, `IndexAlias` |
+| Write throttled | Warning | `Azure AI Search throttled a write to` | `IndexName`, `Reason`, `Retry`, `Retries`, `Delay` |
+| Batch rejected and split | Warning | `Azure rejected a batch of` | `DocumentCount`, `IndexName`, `StatusCode` |
+| Document not written | Error | `Failed to index document` | `DocumentKey`, `Id`, `IndexAlias`, `StatusCode`, `ErrorMessage` |
 | Option has no effect | Warning | `ZeroDowntimeRebuild has no effect` | `IndexAlias` |
 
 The package cannot see the Umbraco Search queue, so the swap event has no count of the changes that waited.
@@ -175,6 +220,7 @@ With `IndexPerCulture`, this happens once for each culture index and the fallbac
 - Serverless ignores the option.
 - The package publishes `IndexSwappedNotification` on the server that ran the rebuild only. On a load-balanced site, clear shared caches from that server, or tell the other servers.
 - Editors may report "my change is not in search" during a rebuild. Their change shows when the rebuild ends.
+- A rebuild with `RebuildBatchSize` writes the last documents when it completes. A search on the new index during the rebuild can miss them.
 - A large content delete makes the count check fail. Lower `RebuildMinimumDocumentPercent`, or set it to `0`, for that rebuild.
 - Umbraco Search publishes `IndexRebuildCompletedNotification` also for a cancelled rebuild. Code that listens to it must check the cancellation token.
 - The index name is now an alias. Tools that read the index definition, such as the Azure portal's index page, must use `<name>-a` or `<name>-b`. Queries work through the alias.
