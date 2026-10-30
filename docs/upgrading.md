@@ -117,6 +117,18 @@ To make a rebuild faster, set [`RebuildBatchSize`](zero-downtime-rebuild.md#batc
 
 After a swap, the package publishes `IndexSwappedNotification`. Use it to clear caches of search results. See [Swap notification](zero-downtime-rebuild.md#swap-notification).
 
+## Requests per write
+
+A publish of an item now sends one request to each Azure index of the item. The request uploads the variations of the item and deletes the documents of every other variation the item can have.
+
+| Version | Requests for each write | What they are |
+|---|---|---|
+| 17.4.0 and 17.4.1 | 3 | A schema read, the upload, and a search for the documents of removed variations |
+| 17.4.2 | 2 | The upload and the search. The package keeps the field names in memory. |
+| This version | 1 | The upload and the deletes in one request |
+
+A write with segments still searches. See [Removed variations](index-definition.md#removed-variations). No rebuild is needed.
+
 ## Upgrade order
 
 None yet.
