@@ -139,6 +139,24 @@ public class AzureSearchOneRequestWriteTests
         });
     }
 
+    // An item of a content type that varies by segment can lose its last segment value. Its write then has no segment.
+    [Test]
+    public async Task AWriteLooksUpRemovedVariationsWhenTheContentTypeVariesBySegment()
+    {
+        var contentType = Guid.NewGuid();
+        var (service, azure, services) = Create(["en-US"],
+            services => services.AddSingleton<IUmbracoContentSource>(new LanguageSource(["en-US"], contentType)));
+        await WarmUpAsync(service, azure, services);
+
+        await services.GetRequiredService<IIndexer>().AddOrUpdateAsync(IndexAlias, Guid.NewGuid(), UmbracoObjectTypes.Document, Cultures("en-US"),
+        [
+            new IndexField(Umbraco.Cms.Search.Core.Constants.FieldNames.ContentTypeId, new IndexValue { Keywords = [contentType.AsKeyword()] }, null, null),
+            new IndexField("title", new IndexValue { Keywords = ["Red boat"] }, "en-US", null),
+        ], null);
+
+        Assert.That(azure.Searches, Is.EqualTo(new[] { Name }));
+    }
+
     // Without the languages (e.g. before Umbraco is installed) the candidates are unknown.
     [Test]
     public async Task AWriteLooksUpRemovedVariationsWhenTheLanguagesAreUnknown()
@@ -280,8 +298,10 @@ public class AzureSearchOneRequestWriteTests
         });
     }
 
-    private sealed class LanguageSource(string[]? languages) : IUmbracoContentSource
+    private sealed class LanguageSource(string[]? languages, Guid? segmentContentType = null) : IUmbracoContentSource
     {
+        public bool VariesBySegment(Guid contentTypeKey, UmbracoObjectTypes objectType) => contentTypeKey == segmentContentType;
+
         public Guid? GetContentTypeKey(string alias, UmbracoObjectTypes objectType) => null;
 
         public IContentBase? GetContent(Guid id, UmbracoObjectTypes objectType) => null;
