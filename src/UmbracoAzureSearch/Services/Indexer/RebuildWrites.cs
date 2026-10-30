@@ -46,6 +46,7 @@ internal sealed class RebuildWrites
 /// <summary>One rebuild of an index.</summary>
 internal sealed class RebuildFlow(string indexAlias, RebuildBatch? batch)
 {
+    // The Azure indexes the reset of this rebuild emptied. Only the keys count.
     public string IndexAlias { get; } = indexAlias;
 
     /// <summary>The batch of the rebuild writes, or null when each item is sent at once.</summary>

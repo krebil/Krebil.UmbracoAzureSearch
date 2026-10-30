@@ -276,7 +276,7 @@ public class AzureSearchIndexPerCultureTests
     }
 
     // A plain rebuild empties every index of the alias, so its deletes send no request there. A language added during the
-    // rebuild needs the fallback index, which the reset did not empty: the delete searches it.
+    // rebuild needs the fallback index, which the reset did not empty. The delete searches it.
     [Test]
     public async Task APlainRebuildDeleteSearchesOnlyAnIndexTheResetDidNotEmpty()
     {
@@ -284,6 +284,28 @@ public class AzureSearchIndexPerCultureTests
         var service = Service([], existingIndexes: [Fr, En], languageSource: languages);
         var services = service.CreateServices();
         var indexer = services.GetRequiredService<IIndexer>();
+
+        await indexer.ResetAsync(IndexAlias);
+        languages.Languages = ["fr-FR", "en-US", "da-DK"];
+        service.ClearRequests();
+        await indexer.DeleteAsync(IndexAlias, [Guid.NewGuid()]);
+
+        Assert.That(service.Requests.Where(r => r.Path.Contains("search.post.search")).Select(r => IndexName(r.Path)),
+            Is.EqualTo(new[] { Fallback }));
+    }
+
+    // A zero-downtime rebuild empties the new slots only. A fallback index that a language added during the rebuild needs
+    // has no slot, so the delete searches the live fallback index.
+    [Test]
+    public async Task AZeroDowntimeRebuildDeleteSearchesOnlyAnIndexTheResetDidNotEmpty()
+    {
+        var languages = new LanguageSource(["fr-FR", "en-US"]);
+        var service = Service([], index =>
+        {
+            IndexPerCulture(index);
+            index.ZeroDowntimeRebuild();
+        }, existingIndexes: [Fr, En], languageSource: languages);
+        var indexer = service.CreateServices().GetRequiredService<IIndexer>();
 
         await indexer.ResetAsync(IndexAlias);
         languages.Languages = ["fr-FR", "en-US", "da-DK"];

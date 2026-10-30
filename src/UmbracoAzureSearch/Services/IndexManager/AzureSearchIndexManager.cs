@@ -123,9 +123,10 @@ public class AzureSearchIndexManager(
         // A rebuild that failed earlier left its state behind; a new rebuild replaces it.
         slots.Take(indexAlias);
 
-        // All indexes of one alias rebuild together. The rebuild that called the reset, if any, learns which indexes are empty.
+        // All indexes of one alias rebuild together. The rebuild flow that called the reset, if any, learns which indexes
+        // are empty.
         var indexes = await physicalIndexes.AllAsync(indexAlias, definition);
-        var rebuild = serviceProvider.GetRequiredService<RebuildWrites>().Active(indexAlias);
+        var rebuild = serviceProvider.GetRequiredService<RebuildWrites>().Current(indexAlias);
         if (slots.Enabled(definition))
         {
             var rebuilds = new List<SlotRebuild>();
