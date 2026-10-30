@@ -202,13 +202,14 @@ Azure accepts the delete of a document that does not exist. It answers with stat
 | No segments | Uploads and deletes in one request. |
 | `IndexPerCulture` | Each Azure index gets the deletes of its own cultures and of the invariant document. An index that gets no upload gets one request with deletes only. |
 | A variation or field of the write has a segment | The package cannot list the segments of an item. It uploads, then searches for the documents of the item, and deletes the documents it did not upload. |
-| Segments are on in Umbraco (`Umbraco:CMS:Segment:Enabled`) | As with a segment. An item that no longer varies by segment can still have segment documents. |
 | The package cannot read the Umbraco languages | As with a segment. |
 | A rebuild write | No deletes and no search. The rebuild index starts empty. See [Writes during a rebuild](zero-downtime-rebuild.md#writes-during-a-rebuild). |
 
-When you delete an Umbraco language, Umbraco Search rebuilds every index with documents. The rebuild removes the documents of that language.
+An item that no longer varies by segment keeps its segment documents. Its next write has no segment, so the package does not search. Rebuild the index after you remove segment variance from a document type.
 
-A delete that Azure rejects is logged at Error with "Failed to delete document". The upload in the same request still counts.
+When you delete an Umbraco language, Umbraco Search rebuilds every index with documents. The rebuild removes the documents of that language. Until the rebuild completes, the old index still has them.
+
+The deletes go in the request of the upload, also when Azure rejects an upload in it. A delete that Azure rejects is logged at Error with "Failed to delete document". The upload in the same request still counts.
 
 ## Field budget
 

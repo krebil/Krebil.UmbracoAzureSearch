@@ -106,7 +106,7 @@ A Basic service has little capacity. During a rebuild it can answer with 503 ("n
 - Throttled writes (429, 503): the Azure SDK retries 3 times within a few seconds. Then the package sends the request, or the throttled documents of it, again after 2, 4, 8, 16 and 32 seconds. Then the write fails as before. This applies to every write, with and without batches.
 - Schema updates: a document with a new field updates the Azure index. The package runs the schema updates of one Azure index one at a time in each process, each on a fresh read of the schema. When Azure answers 409 ("cannot be updated due to a concurrent operation", or "cannot be updated in 'Updating' state"), for example for an update from another server, the package reads the schema again and retries after 0.5, 1, 2 and 4 seconds. Then the update fails as before.
 - The package keeps the field names of each Azure index in memory. A write whose fields the index already has reads no schema.
-- A write sends its uploads and the deletes of removed variations in one request. It does not search. See [Removed variations](index-definition.md#removed-variations).
+- A write without segments sends its uploads and the deletes of removed variations in one request. It does not search. See [Removed variations](index-definition.md#removed-variations).
 - A new index already has the Umbraco system fields and the Delivery API index handler fields, so the first documents of a rebuild do not update the schema. See [Fields of a new index](index-definition.md#fields-of-a-new-index).
 
 ## Count check
