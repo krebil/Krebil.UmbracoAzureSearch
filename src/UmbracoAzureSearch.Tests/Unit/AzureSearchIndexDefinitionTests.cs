@@ -53,8 +53,11 @@ public class AzureSearchIndexDefinitionTests
 
     private static JsonElement[] Documents(FakeSearchService service)
     {
+        // The uploads; the same request deletes the documents of the variations the content does not have.
         var body = service.Requests.Last(r => r.Path.Contains("search.index")).Body!;
-        return JsonDocument.Parse(body).RootElement.GetProperty("value").EnumerateArray().ToArray();
+        return JsonDocument.Parse(body).RootElement.GetProperty("value").EnumerateArray()
+            .Where(d => d.GetProperty("@search.action").GetString() == "upload")
+            .ToArray();
     }
 
     private static string[] Properties(JsonElement document)

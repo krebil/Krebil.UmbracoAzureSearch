@@ -61,16 +61,19 @@ public class AzureSearchIndexer(
         var physicalIndexes = serviceProvider.GetRequiredService<PhysicalIndexes>();
         var all = await physicalIndexes.AllAsync(indexAlias, definition);
 
-        var variationList = variations.Where(v => definition.HoldsCulture(v.Culture)).ToArray();
+        var allVariations = variations.ToArray();
+        var variationList = allVariations.Where(v => definition.HoldsCulture(v.Culture)).ToArray();
         if (variationList.Length == 0)
         {
             // The index may still hold a culture that the content no longer has.
             logger.LogDebug("Skipping {Id} for {IndexAlias}: none of its cultures is in the index", id, indexAlias);
-            await DeleteRemovedVariationsAsync(indexAlias, definition, id, all, rebuildWrite);
+            await DeleteRemovedVariationsAsync(indexAlias, definition, id, all, rebuildWrite,
+                rebuildWrite ? null : await CandidateIdsAsync(indexAlias, definition, id, allVariations, fieldList));
             return;
         }
 
         fieldList = await AddIndexerFieldsAsync(indexAlias, definition, id, objectType, variationList, fieldList);
+        var candidates = rebuildWrite ? null : await CandidateIdsAsync(indexAlias, definition, id, allVariations, fieldList);
 
         // IndexPerCulture: each culture goes to its own index, invariant documents to every index of the alias.
         var targets = variationList
@@ -83,11 +86,44 @@ public class AzureSearchIndexer(
 
         foreach (var target in targets)
         {
-            await WriteAsync(indexAlias, target.Key, definition.For(target.Key.Analyzer), id, objectType, target.ToArray(), fieldList, protection, rebuild);
+            await WriteAsync(indexAlias, target.Key, definition.For(target.Key.Analyzer), id, objectType, target.ToArray(), fieldList, protection, rebuild,
+                candidates?.Invoke(target.Key));
         }
 
         // A culture that is no longer published has documents in its own index, which got nothing to write.
-        await DeleteRemovedVariationsAsync(indexAlias, definition, id, all.Except(targets.Select(t => t.Key)), rebuildWrite);
+        await DeleteRemovedVariationsAsync(indexAlias, definition, id, all.Except(targets.Select(t => t.Key)), rebuildWrite, candidates);
+    }
+
+    // The ids of the documents the content can have in an Azure index: one per Umbraco language, and the invariant
+    // document. With IndexPerCulture an index only holds its own cultures, and the invariant document. The write deletes
+    // the ids it does not upload, in the same request, so it needs no search. The package cannot list the segments, so
+    // with a segment in the write the result is null and the write searches as before. Null too when the languages
+    // cannot be read.
+    private async Task<Func<PhysicalIndex, string[]>?> CandidateIdsAsync(
+        string indexAlias, IndexDefinition definition, Guid id, Variation[] variations, IReadOnlyCollection<IndexField> fields)
+    {
+        if (variations.Any(v => v.Segment is not null) || fields.Any(f => f.Segment is not null))
+            return null;
+
+        string[] languages;
+        try
+        {
+            languages = await serviceProvider.GetRequiredService<IUmbracoContentSource>().GetLanguageIsoCodesAsync();
+        }
+        catch (Exception exception)
+        {
+            logger.LogDebug(exception, "Could not read the Umbraco languages. Searching for the documents of removed variations of {Id}", id);
+            return null;
+        }
+
+        var physicalIndexes = serviceProvider.GetRequiredService<PhysicalIndexes>();
+        return physicalIndex => languages
+            .Where(language => !definition.IndexPerCulture
+                               || physicalIndexes.ForCulture(indexAlias, definition, language).Name == physicalIndex.Name)
+            .Select(language => DocumentMapper.DocumentId(id, language, null))
+            .Append(DocumentMapper.DocumentId(id, null, null))
+            .Distinct()
+            .ToArray();
     }
 
     // The rebuild documents that wait in a batch go before a write or delete from outside the rebuild, so the change is
@@ -122,7 +158,8 @@ public class AzureSearchIndexer(
 
     // Deletes every document of the content from indexes that got nothing to write.
     private async Task DeleteRemovedVariationsAsync(
-        string indexAlias, IndexDefinition definition, Guid id, IEnumerable<PhysicalIndex> physicalIndexes, bool rebuildWrite)
+        string indexAlias, IndexDefinition definition, Guid id, IEnumerable<PhysicalIndex> physicalIndexes, bool rebuildWrite,
+        Func<PhysicalIndex, string[]>? candidates)
     {
         foreach (var physicalIndex in physicalIndexes)
         {
@@ -135,7 +172,16 @@ public class AzureSearchIndexer(
                 try
                 {
                     var searchClient = azureSearchClientFactory.GetSearchIndexClient().GetSearchClient(target);
-                    await DeleteRemovedVariationsAsync(searchClient, indexAlias, id, []);
+                    if (candidates is null)
+                    {
+                        await DeleteRemovedVariationsAsync(searchClient, indexAlias, id, []);
+                    }
+                    else
+                    {
+                        var candidateIds = candidates(physicalIndex);
+                        logger.LogDebug("Deleting {DocumentCount} possible document(s) of removed variations for {Id} from {IndexAlias} ({IndexName})", candidateIds.Length, id, indexAlias, target);
+                        LogDeleteFailures(await serviceProvider.GetRequiredService<DocumentWriter>().DeleteAsync(searchClient, candidateIds), id, indexAlias);
+                    }
                 }
                 catch (RequestFailedException ex) when (ex.Status == 404)
                 {
@@ -158,7 +204,8 @@ public class AzureSearchIndexer(
         Variation[] variations,
         IReadOnlyCollection<IndexField> fields,
         ContentProtection? protection,
-        RebuildFlow? rebuild)
+        RebuildFlow? rebuild,
+        string[]? candidateIds)
     {
         foreach (var (target, cleanup) in await TargetsAsync(physicalIndex.Name, definition, rebuild is not null))
         {
@@ -171,7 +218,7 @@ public class AzureSearchIndexer(
                 continue;
             }
 
-            await WriteToIndexAsync(indexAlias, physicalIndex with { Name = target }, definition, id, objectType, variations, fields, protection, cleanup);
+            await WriteToIndexAsync(indexAlias, physicalIndex with { Name = target }, definition, id, objectType, variations, fields, protection, cleanup, candidateIds);
         }
     }
 
@@ -184,16 +231,23 @@ public class AzureSearchIndexer(
         Variation[] variations,
         IReadOnlyCollection<IndexField> fields,
         ContentProtection? protection,
-        bool cleanup)
+        bool cleanup,
+        string[]? candidateIds)
     {
         var searchClient = azureSearchClientFactory.GetSearchIndexClient().GetSearchClient(physicalIndex.Name);
 
         var mappingResult = documentMapper.MapToDocuments(id, objectType, variations, fields, protection, definition);
 
-        logger.LogDebug("Indexing {DocumentCount} document(s) for {Id} into {IndexAlias} ({IndexName})", mappingResult.Documents.Count, id, indexAlias, physicalIndex.Name);
+        // The documents of the variations the content does not have go as deletes in the same request.
+        var writtenIds = mappingResult.Documents.Select(d => d[IndexConstants.FieldNames.Id].ToString()).ToHashSet();
+        var deleteIds = cleanup && candidateIds is not null ? candidateIds.Where(i => !writtenIds.Contains(i)).ToHashSet() : [];
+
+        logger.LogDebug("Indexing {DocumentCount} document(s) for {Id} into {IndexAlias} ({IndexName}), deleting {DeleteCount} possible document(s) of removed variations",
+            mappingResult.Documents.Count, id, indexAlias, physicalIndex.Name, deleteIds.Count);
         var results = await serviceProvider.GetRequiredService<DocumentWriter>()
-            .UploadAsync(physicalIndex, indexAlias, definition, mappingResult.Documents, mappingResult.FieldMappings);
-        var failed = results.Where(r => !r.Succeeded).ToList();
+            .UploadAsync(physicalIndex, indexAlias, definition, mappingResult.Documents, mappingResult.FieldMappings, deleteIds);
+        LogDeleteFailures(results.Where(r => deleteIds.Contains(r.Key)), id, indexAlias);
+        var failed = results.Where(r => !r.Succeeded && !deleteIds.Contains(r.Key)).ToList();
         if (failed.Count > 0)
         {
             foreach (var failure in failed)
@@ -206,7 +260,7 @@ public class AzureSearchIndexer(
         else
         {
             logger.LogDebug("Successfully indexed {DocumentCount} document(s) for {Id} into {IndexAlias}", mappingResult.Documents.Count, id, indexAlias);
-            if (!cleanup)
+            if (!cleanup || candidateIds is not null)
                 return;
 
             try
@@ -252,8 +306,14 @@ public class AzureSearchIndexer(
             return;
 
         logger.LogDebug("Deleting {DocumentCount} document(s) of removed variations for {Id} from {IndexAlias}", removedIds.Count, id, indexAlias);
-        var deleteResults = await serviceProvider.GetRequiredService<DocumentWriter>().DeleteAsync(searchClient, removedIds);
-        foreach (var failure in deleteResults.Where(r => !r.Succeeded))
+        LogDeleteFailures(await serviceProvider.GetRequiredService<DocumentWriter>().DeleteAsync(searchClient, removedIds), id, indexAlias);
+    }
+
+    // Azure answers the delete of a document that does not exist with a success (200). A 404 for one document also means
+    // that the document is not there, so it is no failure.
+    private void LogDeleteFailures(IEnumerable<IndexingResult> deleteResults, Guid id, string indexAlias)
+    {
+        foreach (var failure in deleteResults.Where(r => !r.Succeeded && r.Status != 404))
         {
             logger.LogError(
                 "Failed to delete document {DocumentKey} of a removed variation for content {Id} from {IndexAlias}: [{StatusCode}] {ErrorMessage}",

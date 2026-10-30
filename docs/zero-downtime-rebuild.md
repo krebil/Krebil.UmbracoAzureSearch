@@ -67,9 +67,11 @@ Umbraco Search runs a rebuild as one background task: it calls `ResetAsync`, the
 
 | Write | Goes to | Removed variations |
 |---|---|---|
-| A write or delete of the rebuild | The new index only | Not looked up. The new index starts empty. |
-| A publish, save or delete during the rebuild | Both indexes | Looked up and deleted in both indexes |
-| A direct call to `IIndexer` or `IAzureSearchIndexer` from your code | Both indexes | Looked up and deleted in both indexes |
+| A write or delete of the rebuild | The new index only | None. The new index starts empty. |
+| A publish, save or delete during the rebuild | Both indexes | Deleted in both indexes, in the request of the upload |
+| A direct call to `IIndexer` or `IAzureSearchIndexer` from your code | Both indexes | Deleted in both indexes, in the request of the upload |
+
+See [Removed variations](index-definition.md#removed-variations) for how the package finds the documents to delete.
 
 Content changes made during the rebuild wait in the Umbraco Search queue and run after it, so they reach the new index after the swap. A publish during a rebuild shows up in search when the rebuild ends. Nothing is lost.
 
@@ -104,6 +106,7 @@ A Basic service has little capacity. During a rebuild it can answer with 503 ("n
 - Throttled writes (429, 503): the Azure SDK retries 3 times within a few seconds. Then the package sends the request, or the throttled documents of it, again after 2, 4, 8, 16 and 32 seconds. Then the write fails as before. This applies to every write, with and without batches.
 - Schema updates: a document with a new field updates the Azure index. The package runs the schema updates of one Azure index one at a time in each process, each on a fresh read of the schema. When Azure answers 409 ("cannot be updated due to a concurrent operation", or "cannot be updated in 'Updating' state"), for example for an update from another server, the package reads the schema again and retries after 0.5, 1, 2 and 4 seconds. Then the update fails as before.
 - The package keeps the field names of each Azure index in memory. A write whose fields the index already has reads no schema.
+- A write without segments sends its uploads and the deletes of removed variations in one request. It does not search. See [Removed variations](index-definition.md#removed-variations).
 - A new index already has the Umbraco system fields and the Delivery API index handler fields, so the first documents of a rebuild do not update the schema. See [Fields of a new index](index-definition.md#fields-of-a-new-index).
 
 ## Count check
@@ -194,6 +197,7 @@ With or without the option, the package compares each existing index with the in
 | Write throttled | Warning | `Azure AI Search throttled a write to` | `IndexName`, `Reason`, `Retry`, `Retries`, `Delay` |
 | Batch rejected and split | Warning | `Azure rejected a batch of` | `DocumentCount`, `IndexName`, `StatusCode` |
 | Document not written | Error | `Failed to index document` | `DocumentKey`, `Id`, `IndexAlias`, `StatusCode`, `ErrorMessage` |
+| Removed variation not deleted | Error | `Failed to delete document` | `DocumentKey`, `Id`, `IndexAlias`, `StatusCode`, `ErrorMessage` |
 | Option has no effect | Warning | `ZeroDowntimeRebuild has no effect` | `IndexAlias` |
 
 The package cannot see the Umbraco Search queue, so the swap event has no count of the changes that waited.
