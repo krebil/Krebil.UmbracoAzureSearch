@@ -43,6 +43,17 @@ public class AzureSearchRebuildWriteTests
             cultures.Length == 0 ? [new Variation(null, null)] : cultures.Select(c => new Variation(c, null)).ToArray(),
             [new IndexField("title", new IndexValue { Keywords = ["Red boat"] }, null, null)], null);
 
+    internal static string DocumentId(Guid id) => $"{id.AsKeyword()}_inv_def";
+
+    // A publish or site code: another async flow than the rebuild.
+    internal static Task OutsideTheRebuild(Func<Task> write)
+    {
+        using (ExecutionContext.SuppressFlow())
+        {
+            return Task.Run(write);
+        }
+    }
+
     internal static Task CompleteAsync(IServiceProvider services, CancellationToken cancellationToken = default)
         => services.GetServices<INotificationAsyncHandler<IndexRebuildCompletedNotification>>().Single()
             .HandleAsync(new IndexRebuildCompletedNotification(IndexAlias), cancellationToken);

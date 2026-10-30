@@ -49,16 +49,8 @@ public class AzureSearchOneRequestWriteTests
     private static async Task WarmUpAsync(FakeSearchService service, FakeAzureIndexes azure, IServiceProvider services, params string[] cultures)
     {
         await WriteAsync(services, Guid.NewGuid(), Cultures(cultures.Length > 0 ? cultures : ["en-US", "da-DK"]));
-        ClearRequests(service);
+        service.ClearRequests();
         azure.Searches.Clear();
-    }
-
-    private static void ClearRequests(FakeSearchService service)
-    {
-        lock (service.Requests)
-        {
-            service.Requests.Clear();
-        }
     }
 
     private static string IndexName((HttpMethod Method, string Path, string? Body) request)
@@ -98,7 +90,7 @@ public class AzureSearchOneRequestWriteTests
         await WarmUpAsync(service, azure, services);
         var id = Guid.NewGuid();
         await WriteAsync(services, id, Cultures("en-US", "da-DK"));
-        ClearRequests(service);
+        service.ClearRequests();
 
         await WriteAsync(services, id, Cultures("en-US"));
 
@@ -269,7 +261,7 @@ public class AzureSearchOneRequestWriteTests
 
         var rebuild = RebuildAsync();
         await paused.Task;
-        ClearRequests(service);
+        service.ClearRequests();
 
         await WriteAsync(services, publish, Cultures("en-US"));
         var publishRequests = service.Requests.ToArray();

@@ -19,6 +19,26 @@ internal sealed class FakeSearchService : HttpMessageHandler
 {
     public List<(HttpMethod Method, string Path, string? Body)> Requests { get; } = [];
 
+    /// <summary>The number of requests so far.</summary>
+    public int RequestCount
+    {
+        get
+        {
+            lock (Requests)
+            {
+                return Requests.Count;
+            }
+        }
+    }
+
+    public void ClearRequests()
+    {
+        lock (Requests)
+        {
+            Requests.Clear();
+        }
+    }
+
     /// <summary>A field the fake index does not have: a search naming it is answered as Azure does, with a 400.</summary>
     public string? UnknownField { get; set; }
 
