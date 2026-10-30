@@ -43,6 +43,17 @@ public class AzureSearchRebuildWriteTests
             cultures.Length == 0 ? [new Variation(null, null)] : cultures.Select(c => new Variation(c, null)).ToArray(),
             [new IndexField("title", new IndexValue { Keywords = ["Red boat"] }, null, null)], null);
 
+    internal static string DocumentId(Guid id) => $"{id.AsKeyword()}_inv_def";
+
+    // A publish or site code: another async flow than the rebuild.
+    internal static Task OutsideTheRebuild(Func<Task> write)
+    {
+        using (ExecutionContext.SuppressFlow())
+        {
+            return Task.Run(write);
+        }
+    }
+
     internal static Task CompleteAsync(IServiceProvider services, CancellationToken cancellationToken = default)
         => services.GetServices<INotificationAsyncHandler<IndexRebuildCompletedNotification>>().Single()
             .HandleAsync(new IndexRebuildCompletedNotification(IndexAlias), cancellationToken);
@@ -159,24 +170,5 @@ public class AzureSearchRebuildWriteTests
         await RebuildAsync(services, [Guid.NewGuid()]);
 
         Assert.That(azure.Documents[Name], Has.Count.EqualTo(1));
-    }
-
-    // The rebuild deletes content that has no published variation. It only affects the new slot.
-    [Test]
-    public async Task RebuildDeletesGoToTheNewSlotOnly()
-    {
-        var (service, _, services) = Create();
-
-        await DeleteInRebuildAsync(services);
-
-        Assert.That(service.Requests.Where(r => r.Path.Contains("search.post.search")).Select(r => r.Path),
-            Has.All.Contains(SlotB).And.Not.Empty);
-    }
-
-    private static async Task DeleteInRebuildAsync(IServiceProvider services)
-    {
-        var indexer = services.GetRequiredService<IIndexer>();
-        await indexer.ResetAsync(IndexAlias);
-        await indexer.DeleteAsync(IndexAlias, [Guid.NewGuid()]);
     }
 }

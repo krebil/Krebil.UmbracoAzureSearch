@@ -34,18 +34,7 @@ public class AzureSearchRebuildBatchTests
         return created;
     }
 
-    // A publish or site code: another async flow than the rebuild.
-    private static Task OutsideTheRebuild(Func<Task> write)
-    {
-        using (ExecutionContext.SuppressFlow())
-        {
-            return Task.Run(write);
-        }
-    }
-
     private static Guid[] Items(int count) => Enumerable.Range(0, count).Select(_ => Guid.NewGuid()).ToArray();
-
-    private static string DocumentId(Guid id) => $"{id.AsKeyword()}_inv_def";
 
     private static string[] Errors(FakeSearchService service)
         => service.Logs.Where(l => l.Level == LogLevel.Error).Select(l => l.Message).ToArray();
