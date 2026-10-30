@@ -97,6 +97,7 @@ public class AzureSearchIndexPerCultureTests
             .ToDictionary(
                 g => g.Key,
                 g => g.SelectMany(r => JsonDocument.Parse(r.Body!).RootElement.GetProperty("value").EnumerateArray())
+                    .Where(d => d.GetProperty("@search.action").GetString() == "upload")
                     .Select(d => d.GetProperty("culture").GetString()!)
                     .ToArray());
 
@@ -185,14 +186,12 @@ public class AzureSearchIndexPerCultureTests
         Assert.That(Writes(service).Keys, Is.EquivalentTo(new[] { Fr, En }));
     }
 
-    // An unpublished culture gets nothing to write, but its documents are in its own index.
+    // An unpublished culture gets nothing to write, but its documents are in its own index. The index gets the deletes of
+    // its cultures and of the invariant document, without a search.
     [Test]
     public async Task DeletesTheDocumentsOfARemovedCultureFromItsIndex()
     {
         var service = Service(["fr-FR", "en-US"]);
-        service.Respond = request => request.RequestUri!.AbsolutePath.Contains("search.post.search") && IndexName(request.RequestUri.AbsolutePath) == En
-            ? FakeSearchService.Json("""{"value":[{"id":"removed_en-us_def"}]}""")
-            : null;
 
         await IndexAsync(service, new Variation("fr-FR", null));
 
@@ -200,9 +199,13 @@ public class AzureSearchIndexPerCultureTests
             .Where(r => r.Path.Contains("search.index"))
             .SelectMany(r => JsonDocument.Parse(r.Body!).RootElement.GetProperty("value").EnumerateArray()
                 .Where(d => d.GetProperty("@search.action").GetString() == "delete")
-                .Select(d => (Index: IndexName(r.Path), Id: d.GetProperty("id").GetString())))
+                .Select(d => (Index: IndexName(r.Path), Id: d.GetProperty("id").GetString()![37..])))
             .ToArray();
-        Assert.That(deletes, Is.EqualTo(new[] { (En, "removed_en-us_def") }));
+        Assert.Multiple(() =>
+        {
+            Assert.That(deletes, Is.EquivalentTo(new[] { (En, "en-us_def"), (En, "inv_def"), (Fr, "inv_def") }));
+            Assert.That(service.Requests.Where(r => r.Path.Contains("search.post.search")), Is.Empty);
+        });
     }
 
     [Test]
