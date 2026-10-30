@@ -7,6 +7,7 @@ using Umbraco.Cms.Search.Core.Models.Searching.Filtering;
 using Umbraco.Cms.Search.Core.Models.Searching.Sorting;
 using UmbracoAzureSearch.Services;
 using UmbracoAzureSearch.Services.Factory;
+using UmbracoAzureSearch.Services.IndexAliasResolver;
 using UmbracoAzureSearch.Services.Indexer;
 using UmbracoAzureSearch.Services.IndexManager;
 using UmbracoAzureSearch.Services.Searcher;
@@ -216,7 +217,7 @@ public class AzureSearchIndexerTests : AzureSearchTestBase
     {
         await IndexManager.EnsureAsync(IndexAlias);
         var searchClient = GetRequiredService<IAzureSearchClientFactory>().GetSearchIndexClient()
-            .GetSearchClient(GetRequiredService<UmbracoAzureSearch.Services.IndexAliasResolver.IIndexAliasResolver>().Resolve(IndexAlias));
+            .GetSearchClient(GetRequiredService<IIndexAliasResolver>().Resolve(IndexAlias));
 
         var results = await GetRequiredService<DocumentWriter>().DeleteAsync(searchClient, [$"{Guid.NewGuid():N}_inv_def"]);
 

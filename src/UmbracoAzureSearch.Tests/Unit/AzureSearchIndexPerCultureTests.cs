@@ -187,7 +187,7 @@ public class AzureSearchIndexPerCultureTests
     }
 
     // An unpublished culture gets nothing to write, but its documents are in its own index. The index gets the deletes of
-    // its cultures and of the invariant document, without a search.
+    // its cultures and of the invariant document, without a search. The id after the content key is the variation.
     [Test]
     public async Task DeletesTheDocumentsOfARemovedCultureFromItsIndex()
     {
@@ -199,7 +199,7 @@ public class AzureSearchIndexPerCultureTests
             .Where(r => r.Path.Contains("search.index"))
             .SelectMany(r => JsonDocument.Parse(r.Body!).RootElement.GetProperty("value").EnumerateArray()
                 .Where(d => d.GetProperty("@search.action").GetString() == "delete")
-                .Select(d => (Index: IndexName(r.Path), Id: d.GetProperty("id").GetString()![37..])))
+                .Select(d => (Index: IndexName(r.Path), Id: d.GetProperty("id").GetString()!.Split('_', 2)[1])))
             .ToArray();
         Assert.Multiple(() =>
         {

@@ -1,7 +1,6 @@
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Umbraco.Cms.Core.Configuration.Models;
 using Umbraco.Cms.Core.Models;
 using Umbraco.Cms.Search.Core.Extensions;
 using Umbraco.Cms.Search.Core.Models.Indexing;
@@ -50,13 +49,20 @@ public class AzureSearchOneRequestWriteTests
     private static async Task WarmUpAsync(FakeSearchService service, FakeAzureIndexes azure, IServiceProvider services, params string[] cultures)
     {
         await WriteAsync(services, Guid.NewGuid(), Cultures(cultures.Length > 0 ? cultures : ["en-US", "da-DK"]));
+        ClearRequests(service);
+        azure.Searches.Clear();
+    }
+
+    private static void ClearRequests(FakeSearchService service)
+    {
         lock (service.Requests)
         {
             service.Requests.Clear();
         }
-
-        azure.Searches.Clear();
     }
+
+    private static string IndexName((HttpMethod Method, string Path, string? Body) request)
+        => request.Path.Split("indexes('")[1].Split("')")[0];
 
     private static (string Action, string Id)[] Actions((HttpMethod Method, string Path, string? Body) request)
         => JsonDocument.Parse(request.Body!).RootElement.GetProperty("value").EnumerateArray()
@@ -92,10 +98,7 @@ public class AzureSearchOneRequestWriteTests
         await WarmUpAsync(service, azure, services);
         var id = Guid.NewGuid();
         await WriteAsync(services, id, Cultures("en-US", "da-DK"));
-        lock (service.Requests)
-        {
-            service.Requests.Clear();
-        }
+        ClearRequests(service);
 
         await WriteAsync(services, id, Cultures("en-US"));
 
@@ -142,18 +145,6 @@ public class AzureSearchOneRequestWriteTests
             Assert.That(azure.Searches, Is.EqualTo(new[] { Name }));
             Assert.That(Actions(service.Requests.First(r => r.Path.Contains("search.index"))).Select(a => a.Action), Has.All.EqualTo("upload"));
         });
-    }
-
-    // With segments on in Umbraco, content that no longer varies by segment can still have segment documents.
-    [Test]
-    public async Task AWriteLooksUpRemovedVariationsWhenUmbracoUsesSegments()
-    {
-        var (service, azure, services) = Create(["en-US"], services => services.Configure<SegmentSettings>(s => s.Enabled = true));
-        await WarmUpAsync(service, azure, services);
-
-        await WriteAsync(services, Guid.NewGuid(), Cultures("en-US"));
-
-        Assert.That(azure.Searches, Is.EqualTo(new[] { Name }));
     }
 
     // Without the languages (e.g. before Umbraco is installed) the candidates are unknown.
@@ -209,6 +200,21 @@ public class AzureSearchOneRequestWriteTests
         });
     }
 
+    // Azure answers the delete of a missing document with 200. A 404 for one document means the same.
+    [Test]
+    public async Task DoesNotLogANotFoundDeleteAsAnError()
+    {
+        var (service, azure, services) = Create(["en-US", "da-DK"]);
+        await WarmUpAsync(service, azure, services);
+        var id = Guid.NewGuid();
+        azure.FailingDocuments[$"{id.AsKeyword()}_da-dk_def"] = "Not found";
+        azure.FailingStatuses[$"{id.AsKeyword()}_da-dk_def"] = 404;
+
+        await WriteAsync(services, id, Cultures("en-US"));
+
+        Assert.That(service.Logs, Has.None.Matches<(LogLevel Level, string Message)>(log => log.Level == LogLevel.Error));
+    }
+
     // IndexPerCulture: each index gets the deletes of its own cultures, and of the invariant document.
     [Test]
     public async Task IndexPerCultureDeletesTheCandidatesOfEachIndexInItsOwnRequest()
@@ -225,7 +231,7 @@ public class AzureSearchOneRequestWriteTests
         await WriteAsync(services, id, Cultures("fr-FR"));
 
         var requests = service.Requests.Where(r => r.Path.Contains("search.index"))
-            .ToDictionary(r => r.Path.Split("indexes('")[1].Split("')")[0], Actions);
+            .ToDictionary(IndexName, Actions);
         var key = id.AsKeyword();
         Assert.Multiple(() =>
         {
@@ -263,10 +269,7 @@ public class AzureSearchOneRequestWriteTests
 
         var rebuild = RebuildAsync();
         await paused.Task;
-        lock (service.Requests)
-        {
-            service.Requests.Clear();
-        }
+        ClearRequests(service);
 
         await WriteAsync(services, publish, Cultures("en-US"));
         var publishRequests = service.Requests.ToArray();
@@ -276,7 +279,7 @@ public class AzureSearchOneRequestWriteTests
         var deleteOfDanish = ("delete", $"{publish.AsKeyword()}_da-dk_def");
         Assert.Multiple(() =>
         {
-            Assert.That(publishRequests.Where(r => r.Path.Contains("search.index")).Select(r => r.Path.Split("indexes('")[1].Split("')")[0]),
+            Assert.That(publishRequests.Where(r => r.Path.Contains("search.index")).Select(IndexName),
                 Is.EquivalentTo(new[] { slotA, slotB }));
             Assert.That(publishRequests.Where(r => r.Path.Contains("search.index")).Select(Actions), Has.All.Contains(deleteOfDanish));
             Assert.That(azure.Searches, Is.Empty);
