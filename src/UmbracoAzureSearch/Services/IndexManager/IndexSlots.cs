@@ -82,6 +82,10 @@ internal sealed class IndexSlots(IAzureSearchClientFactory azureSearchClientFact
         return [await LiveAsync(name, definition)];
     }
 
+    /// <summary>The new slot of the rebuild in progress for a name, or null when no zero-downtime rebuild runs.</summary>
+    public string? NewSlot(string name, IndexDefinition definition)
+        => Enabled(definition) && _rebuilds.Values.SelectMany(r => r).FirstOrDefault(r => r.Name == name) is { } rebuild ? rebuild.New : null;
+
     public void Start(string indexAlias, SlotRebuild[] rebuilds) => _rebuilds[indexAlias] = rebuilds;
 
     /// <summary>Ends the rebuild of an alias and returns its slots, or an empty array when none runs.</summary>
