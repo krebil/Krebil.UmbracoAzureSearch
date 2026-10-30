@@ -67,15 +67,31 @@ Umbraco Search runs a rebuild as one background task: it calls `ResetAsync`, the
 
 | Write | Goes to | Removed variations |
 |---|---|---|
-| A write or delete of the rebuild | The new index only | None. The new index starts empty. |
+| A write of the rebuild | The new index only | None. The new index starts empty. |
+| A delete of the rebuild | Nowhere. The package sends no request. | None. See [Deletes of the rebuild](#deletes-of-the-rebuild). |
 | A publish, save or delete during the rebuild | Both indexes | Deleted in both indexes, in the request of the upload |
 | A direct call to `IIndexer` or `IAzureSearchIndexer` from your code | Both indexes | Deleted in both indexes, in the request of the upload |
 
 See [Removed variations](index-definition.md#removed-variations) for how the package finds the documents to delete.
 
-Content changes made during the rebuild wait in the Umbraco Search queue and run after it, so they reach the new index after the swap. A publish during a rebuild shows up in search when the rebuild ends. Nothing is lost.
+### Deletes of the rebuild
 
-Your code runs in its own flow, also when it runs during the rebuild. Its writes go to both indexes, so the old index stays current and the new index misses nothing. Code that runs inside the rebuild flow, for example a `ContentIndexingNotification` handler that calls the indexer, writes as the rebuild does.
+During the rebuild, Umbraco Search deletes each item without a published variation, for example an unpublished page. Outside a rebuild, a delete searches the index for the documents of the item and its descendants (`Umb_PathIds`). Then it deletes these documents.
+
+During a zero-downtime rebuild, a delete of the rebuild sends no request. The new index holds nothing that the search could find:
+
+- Umbraco Search writes no document of an item that it deletes.
+- Umbraco Search goes through the content tree by path. It deletes an item before it writes any descendant of that item.
+- The new index only holds what the rebuild wrote. The batch only holds documents of other items.
+
+Example: a zero-downtime rebuild of 17,895 documents on a staging site sent 2,381 of these searches. Each search found nothing. The rebuild fell from about 2,000 to about 200 documents a minute.
+
+These deletes search and delete as before:
+
+- A delete outside the rebuild flow. It goes to both indexes.
+- A delete of a rebuild without zero-downtime rebuild. It goes to the live index.
+
+The package also skips a delete from code inside the rebuild flow, for example a `ContentIndexingNotification` handler. A document that the rebuild already wrote stays in the new index. To keep an item out of the rebuild, cancel its `ContentIndexingNotification`. A document that your code wrote to both indexes during the rebuild also stays in the new index when the rebuild deletes the item.
 
 ## Batch size
 
