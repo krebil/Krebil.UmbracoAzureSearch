@@ -389,26 +389,25 @@ public class AzureSearchIndexer(
         var definition = new IndexDefinition(azureSearchIndexOptions.Get(indexAlias));
         var idList = ids.ToArray();
         var rebuildWrites = serviceProvider.GetRequiredService<RebuildWrites>();
-        var rebuildWrite = rebuildWrites.Current(indexAlias) is not null;
+        var rebuild = rebuildWrites.Current(indexAlias);
 
-        if (!rebuildWrite)
+        if (rebuild is null)
         {
             await FlushRebuildBatchAsync(rebuildWrites, indexAlias);
         }
 
-        var slots = serviceProvider.GetRequiredService<IndexSlots>();
         foreach (var physicalIndex in await serviceProvider.GetRequiredService<PhysicalIndexes>().AllAsync(indexAlias, definition))
         {
-            // Zero-downtime rebuild: the new slot holds no document of an item the rebuild deletes, or of its descendants,
-            // so the search would find nothing. See "Deletes of the rebuild" in zero-downtime-rebuild.md.
-            if (rebuildWrite && slots.NewSlot(physicalIndex.Name, definition) is { } newSlot)
+            foreach (var (target, _) in await TargetsAsync(physicalIndex.Name, definition, rebuild is not null))
             {
-                logger.LogDebug("Skipping the delete of {Ids} from {IndexAlias} ({IndexName}): the rebuild wrote no document of them", idList, indexAlias, newSlot);
-                continue;
-            }
+                // An index the reset of the rebuild emptied holds no document of an item the rebuild deletes, or of its
+                // descendants, so the search would find nothing. See "Deletes of the rebuild" in zero-downtime-rebuild.md.
+                if (rebuild?.WasReset(target) == true)
+                {
+                    logger.LogDebug("Skipping the delete of {Ids} from {IndexAlias} ({IndexName}): the rebuild wrote no document of them", idList, indexAlias, target);
+                    continue;
+                }
 
-            foreach (var (target, _) in await TargetsAsync(physicalIndex.Name, definition, rebuildWrite))
-            {
                 try
                 {
                     await DeleteAsync(indexAlias, azureSearchClientFactory.GetSearchIndexClient().GetSearchClient(target), idList);

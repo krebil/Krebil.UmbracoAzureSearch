@@ -155,22 +155,38 @@ public class AzureSearchRebuildDeleteTests
         });
     }
 
-    // A plain rebuild writes the live index, so its deletes search and delete there as before.
+    // A plain rebuild also starts from an empty index: ResetAsync deletes and creates it again. Its deletes send no request.
     [Test]
-    public async Task APlainRebuildDeleteDeletesTheDescendants()
+    public async Task APlainRebuildDeleteSendsNoRequest()
     {
-        var (service, azure, services) = CreatePlainWithTree();
+        var (service, _, services) = CreatePlainWithTree();
         var indexer = services.GetRequiredService<IIndexer>();
 
         await indexer.ResetAsync(IndexAlias);
-        await WriteTreeAsync(services);
+        await WriteAsync(services, Guid.NewGuid());
         service.ClearRequests();
         await indexer.DeleteAsync(IndexAlias, [Parent]);
+
+        Assert.That(service.RequestCount, Is.Zero);
+    }
+
+    // An unpublish during a plain rebuild runs in another flow. It searches the index and deletes the descendants.
+    [Test]
+    public async Task ADeleteOutsideAPlainRebuildDeletesTheDescendants()
+    {
+        var (service, azure, services) = CreatePlainWithTree();
+
+        await RebuildAsync(services, [Guid.NewGuid(), Guid.NewGuid()], () => OutsideTheRebuild(async () =>
+        {
+            await WriteTreeAsync(services);
+            service.ClearRequests();
+            await services.GetRequiredService<IIndexer>().DeleteAsync(IndexAlias, [Parent]);
+        }));
 
         Assert.Multiple(() =>
         {
             Assert.That(SearchedIndexes(service), Is.EqualTo(new[] { Name }));
-            Assert.That(azure.Documents[Name], Is.Empty);
+            Assert.That(azure.Documents[Name], Has.No.Member(DocumentId(Parent)).And.No.Member(DocumentId(Child)));
         });
     }
 }
