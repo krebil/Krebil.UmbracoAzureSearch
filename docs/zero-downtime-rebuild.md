@@ -78,20 +78,28 @@ See [Removed variations](index-definition.md#removed-variations) for how the pac
 
 During the rebuild, Umbraco Search deletes each item without a published variation, for example an unpublished page. Outside a rebuild, a delete searches the index for the documents of the item and its descendants (`Umb_PathIds`). Then it deletes these documents.
 
-During a zero-downtime rebuild, a delete of the rebuild sends no request. The new index holds nothing that the search could find:
+A delete of the rebuild sends no request to an index that the rebuild emptied. This applies to every rebuild:
+
+- A zero-downtime rebuild fills a new, empty index.
+- A rebuild without zero-downtime rebuild deletes the index and creates it again.
+- A rebuild on a serverless service also deletes the index and creates it again.
+
+An index that the rebuild emptied holds nothing that the search could find:
 
 - Umbraco Search writes no document of an item that it deletes.
 - Umbraco Search goes through the content tree by path. It deletes an item before it writes any descendant of that item.
-- The new index only holds what the rebuild wrote. The batch only holds documents of other items.
+- The index only holds what the rebuild wrote. The batch only holds documents of other items.
 
 Example: a zero-downtime rebuild of 17,895 documents on a staging site sent 2,381 of these searches. Each search found nothing. The rebuild fell from about 2,000 to about 200 documents a minute.
 
 These deletes search and delete as before:
 
-- A delete outside the rebuild flow. It goes to both indexes.
-- A delete of a rebuild without zero-downtime rebuild. It goes to the live index.
+- A delete outside the rebuild flow. During a zero-downtime rebuild it goes to both indexes.
+- A delete of the rebuild to an index that the rebuild did not empty. Example: with `IndexPerCulture`, a language added during the rebuild needs the fallback index. The reset did not empty that index.
 
-The package also skips a delete from code inside the rebuild flow, for example a `ContentIndexingNotification` handler. A document that the rebuild already wrote stays in the new index. To keep an item out of the rebuild, cancel its `ContentIndexingNotification`. A document that your code wrote to both indexes during the rebuild also stays in the new index when the rebuild deletes the item.
+The package also skips a delete from code inside the rebuild flow, for example a `ContentIndexingNotification` handler. A document that the rebuild already wrote stays in the index. To keep an item out of the rebuild, cancel its `ContentIndexingNotification`.
+
+Your code can also call `IIndexer` in its own flow during the rebuild. If it writes an item, and the rebuild then deletes the same item, the document stays in the index until the next write or delete of the item. Umbraco Search runs content changes after the rebuild. So only such direct calls cause this.
 
 ## Batch size
 

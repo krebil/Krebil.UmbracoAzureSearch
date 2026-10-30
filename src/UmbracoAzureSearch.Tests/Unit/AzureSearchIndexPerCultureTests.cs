@@ -26,13 +26,14 @@ public class AzureSearchIndexPerCultureTests
 
     // existingIndexes: the Azure indexes the fake service has; null answers every index as existing.
     private static FakeSearchService Service(
-        string[] languages, Action<AzureSearchIndexBuilder>? configure = null, string[]? existingIndexes = null)
+        string[] languages, Action<AzureSearchIndexBuilder>? configure = null, string[]? existingIndexes = null,
+        LanguageSource? languageSource = null)
     {
         var service = new FakeSearchService
         {
             ConfigureServices = services =>
             {
-                services.AddSingleton<IUmbracoContentSource>(new LanguageSource(languages));
+                services.AddSingleton<IUmbracoContentSource>(languageSource ?? new LanguageSource(languages));
                 services.ConfigureAzureSearchIndex(IndexAlias, configure ?? IndexPerCulture);
             },
         };
@@ -274,6 +275,47 @@ public class AzureSearchIndexPerCultureTests
             Is.EquivalentTo(new[] { Fr, En, Fallback }));
     }
 
+    // A plain rebuild empties every index of the alias, so its deletes send no request there. A language added during the
+    // rebuild needs the fallback index, which the reset did not empty. The delete searches it.
+    [Test]
+    public async Task APlainRebuildDeleteSearchesOnlyAnIndexTheResetDidNotEmpty()
+    {
+        var languages = new LanguageSource(["fr-FR", "en-US"]);
+        var service = Service([], existingIndexes: [Fr, En], languageSource: languages);
+        var services = service.CreateServices();
+        var indexer = services.GetRequiredService<IIndexer>();
+
+        await indexer.ResetAsync(IndexAlias);
+        languages.Languages = ["fr-FR", "en-US", "da-DK"];
+        service.ClearRequests();
+        await indexer.DeleteAsync(IndexAlias, [Guid.NewGuid()]);
+
+        Assert.That(service.Requests.Where(r => r.Path.Contains("search.post.search")).Select(r => IndexName(r.Path)),
+            Is.EqualTo(new[] { Fallback }));
+    }
+
+    // A zero-downtime rebuild empties the new slots only. A fallback index that a language added during the rebuild needs
+    // has no slot, so the delete searches the live fallback index.
+    [Test]
+    public async Task AZeroDowntimeRebuildDeleteSearchesOnlyAnIndexTheResetDidNotEmpty()
+    {
+        var languages = new LanguageSource(["fr-FR", "en-US"]);
+        var service = Service([], index =>
+        {
+            IndexPerCulture(index);
+            index.ZeroDowntimeRebuild();
+        }, existingIndexes: [Fr, En], languageSource: languages);
+        var indexer = service.CreateServices().GetRequiredService<IIndexer>();
+
+        await indexer.ResetAsync(IndexAlias);
+        languages.Languages = ["fr-FR", "en-US", "da-DK"];
+        service.ClearRequests();
+        await indexer.DeleteAsync(IndexAlias, [Guid.NewGuid()]);
+
+        Assert.That(service.Requests.Where(r => r.Path.Contains("search.post.search")).Select(r => IndexName(r.Path)),
+            Is.EqualTo(new[] { Fallback }));
+    }
+
     [Test]
     public async Task CountsTheDocumentsOfEveryIndex()
     {
@@ -320,10 +362,12 @@ public class AzureSearchIndexPerCultureTests
 
     private sealed class LanguageSource(string[] languages) : IUmbracoContentSource
     {
+        public string[] Languages { get; set; } = languages;
+
         public Guid? GetContentTypeKey(string alias, UmbracoObjectTypes objectType) => null;
 
         public IContentBase? GetContent(Guid id, UmbracoObjectTypes objectType) => null;
 
-        public Task<string[]> GetLanguageIsoCodesAsync() => Task.FromResult(languages);
+        public Task<string[]> GetLanguageIsoCodesAsync() => Task.FromResult(Languages);
     }
 }
