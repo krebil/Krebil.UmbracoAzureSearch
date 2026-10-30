@@ -46,8 +46,17 @@ internal sealed class RebuildWrites
 /// <summary>One rebuild of an index.</summary>
 internal sealed class RebuildFlow(string indexAlias, RebuildBatch? batch)
 {
+    // The Azure indexes the reset of this rebuild emptied. Only the keys count.
     public string IndexAlias { get; } = indexAlias;
 
     /// <summary>The batch of the rebuild writes, or null when each item is sent at once.</summary>
     public RebuildBatch? Batch { get; } = batch;
+
+    private readonly ConcurrentDictionary<string, bool> _resetIndexes = new(StringComparer.Ordinal);
+
+    /// <summary>Marks an Azure index that the reset of this rebuild left empty.</summary>
+    public void MarkReset(string indexName) => _resetIndexes[indexName] = true;
+
+    /// <summary>True when the reset of this rebuild left the Azure index empty, so it only holds what the rebuild wrote.</summary>
+    public bool WasReset(string indexName) => _resetIndexes.ContainsKey(indexName);
 }

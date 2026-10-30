@@ -123,14 +123,18 @@ public class AzureSearchIndexManager(
         // A rebuild that failed earlier left its state behind; a new rebuild replaces it.
         slots.Take(indexAlias);
 
-        // All indexes of one alias rebuild together.
+        // All indexes of one alias rebuild together. The rebuild flow that called the reset, if any, learns which indexes
+        // are empty.
         var indexes = await physicalIndexes.AllAsync(indexAlias, definition);
+        var rebuild = serviceProvider.GetRequiredService<RebuildWrites>().Current(indexAlias);
         if (slots.Enabled(definition))
         {
             var rebuilds = new List<SlotRebuild>();
             foreach (var physicalIndex in indexes)
             {
-                rebuilds.Add(await StartSlotRebuildAsync(indexClient, indexAlias, physicalIndex, definition.For(physicalIndex.Analyzer)));
+                var slotRebuild = await StartSlotRebuildAsync(indexClient, indexAlias, physicalIndex, definition.For(physicalIndex.Analyzer));
+                rebuild?.MarkReset(slotRebuild.New);
+                rebuilds.Add(slotRebuild);
             }
 
             slots.Start(indexAlias, rebuilds.ToArray());
@@ -153,6 +157,7 @@ public class AzureSearchIndexManager(
             // Recreate from code, not from the old definition, so a rebuild also applies schema changes such as
             // suggestions. Property fields come back as the rebuild indexes documents (see EnsureFieldsExist).
             await schemaUpdates.CreateAsync(IndexSchema.BuildNew(physicalIndex, indexAlias, definition.For(physicalIndex.Analyzer)));
+            rebuild?.MarkReset(physicalIndex.Name);
         }
     }
 

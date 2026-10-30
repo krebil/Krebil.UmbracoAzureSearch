@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Umbraco.Cms.Search.Core.Services;
 using UmbracoAzureSearch.Configuration;
+using UmbracoAzureSearch.Extensions;
 using static UmbracoAzureSearch.Tests.Unit.AzureSearchRebuildWriteTests;
 
 namespace UmbracoAzureSearch.Tests.Unit;
@@ -155,22 +156,65 @@ public class AzureSearchRebuildDeleteTests
         });
     }
 
-    // A plain rebuild writes the live index, so its deletes search and delete there as before.
+    // A plain rebuild also starts from an empty index: ResetAsync deletes and creates it again. Its deletes send no request.
     [Test]
-    public async Task APlainRebuildDeleteDeletesTheDescendants()
+    public async Task APlainRebuildDeleteSendsNoRequest()
     {
-        var (service, azure, services) = CreatePlainWithTree();
+        var (service, _, services) = CreatePlainWithTree();
         var indexer = services.GetRequiredService<IIndexer>();
 
         await indexer.ResetAsync(IndexAlias);
-        await WriteTreeAsync(services);
+        await WriteAsync(services, Guid.NewGuid());
+        service.ClearRequests();
+        await indexer.DeleteAsync(IndexAlias, [Parent]);
+
+        Assert.That(service.RequestCount, Is.Zero);
+    }
+
+    // A serverless service has no aliases, so the rebuild is a plain rebuild also with ZeroDowntimeRebuild on.
+    [Test]
+    public async Task AServerlessRebuildDeleteSendsNoRequest()
+    {
+        var azure = new FakeAzureIndexes();
+        var service = new FakeSearchService
+        {
+            Respond = azure.Respond,
+            ConfigureServices = services => services.ConfigureAzureSearchIndex(IndexAlias, index => index.ZeroDowntimeRebuild()),
+        };
+        service.Settings["UmbracoAzureSearch:Serverless"] = "true";
+        var services = service.CreateServices();
+        azure.AddIndex(Name);
+        var indexer = services.GetRequiredService<IIndexer>();
+
+        await indexer.ResetAsync(IndexAlias);
+        await WriteAsync(services, Guid.NewGuid());
         service.ClearRequests();
         await indexer.DeleteAsync(IndexAlias, [Parent]);
 
         Assert.Multiple(() =>
         {
+            Assert.That(service.RequestCount, Is.Zero);
+            Assert.That(azure.Aliases, Is.Empty);
+        });
+    }
+
+    // An unpublish during a plain rebuild runs in another flow. It searches the index and deletes the descendants.
+    [Test]
+    public async Task ADeleteOutsideAPlainRebuildDeletesTheDescendants()
+    {
+        var (service, azure, services) = CreatePlainWithTree();
+
+        await RebuildAsync(services, [Guid.NewGuid(), Guid.NewGuid()], () => OutsideTheRebuild(async () =>
+        {
+            await WriteTreeAsync(services);
+            service.ClearRequests();
+            await services.GetRequiredService<IIndexer>().DeleteAsync(IndexAlias, [Parent]);
+        }));
+
+        Assert.Multiple(() =>
+        {
             Assert.That(SearchedIndexes(service), Is.EqualTo(new[] { Name }));
-            Assert.That(azure.Documents[Name], Is.Empty);
+            Assert.That(azure.Documents[Name], Has.No.Member(DocumentId(Parent)).And.No.Member(DocumentId(Child)));
         });
     }
 }
