@@ -8,6 +8,7 @@ using Umbraco.Cms.Search.Core.Notifications;
 using UmbracoAzureSearch.Models;
 using UmbracoAzureSearch.Notifications;
 using UmbracoAzureSearch.Services.Factory;
+using UmbracoAzureSearch.Services.Indexer;
 using UmbracoAzureSearch.Services.IndexManager;
 
 namespace UmbracoAzureSearch.NotificationHandlers;
@@ -20,6 +21,7 @@ namespace UmbracoAzureSearch.NotificationHandlers;
 internal sealed class ZeroDowntimeRebuildHandler(
     IndexSlots slots,
     IndexSchemaUpdates schemaUpdates,
+    RebuildWrites rebuildWrites,
     IAzureSearchClientFactory azureSearchClientFactory,
     IOptionsMonitor<AzureSearchIndexOptions> azureSearchIndexOptions,
     IEventAggregator eventAggregator,
@@ -29,6 +31,9 @@ internal sealed class ZeroDowntimeRebuildHandler(
     public async Task HandleAsync(IndexRebuildCompletedNotification notification, CancellationToken cancellationToken)
     {
         var indexAlias = notification.IndexAlias;
+
+        // Writes from now on are not rebuild writes, also for an index without zero-downtime rebuild.
+        rebuildWrites.End(indexAlias);
         var rebuilds = slots.Take(indexAlias);
         if (rebuilds.Length == 0)
             return;

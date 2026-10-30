@@ -53,6 +53,7 @@ public class AzureSearchIndexer(
             return;
         }
 
+        var rebuildWrite = serviceProvider.GetRequiredService<RebuildWrites>().Current(indexAlias) is not null;
         var physicalIndexes = serviceProvider.GetRequiredService<PhysicalIndexes>();
         var all = await physicalIndexes.AllAsync(indexAlias, definition);
 
@@ -61,7 +62,7 @@ public class AzureSearchIndexer(
         {
             // The index may still hold a culture that the content no longer has.
             logger.LogDebug("Skipping {Id} for {IndexAlias}: none of its cultures is in the index", id, indexAlias);
-            await DeleteRemovedVariationsAsync(indexAlias, definition, id, all);
+            await DeleteRemovedVariationsAsync(indexAlias, definition, id, all, rebuildWrite);
             return;
         }
 
@@ -78,21 +79,38 @@ public class AzureSearchIndexer(
 
         foreach (var target in targets)
         {
-            await WriteAsync(indexAlias, target.Key, definition.For(target.Key.Analyzer), id, objectType, target.ToArray(), fieldList, protection);
+            await WriteAsync(indexAlias, target.Key, definition.For(target.Key.Analyzer), id, objectType, target.ToArray(), fieldList, protection, rebuildWrite);
         }
 
         // A culture that is no longer published has documents in its own index, which got nothing to write.
-        await DeleteRemovedVariationsAsync(indexAlias, definition, id, all.Except(targets.Select(t => t.Key)));
+        await DeleteRemovedVariationsAsync(indexAlias, definition, id, all.Except(targets.Select(t => t.Key)), rebuildWrite);
+    }
+
+    // The Azure indexes a write goes to, and whether documents of removed variations can be there. A zero-downtime
+    // rebuild only fills the new slot: its own writes go there only, and the new slot starts empty, so they have nothing
+    // to clean up. Other writes during a rebuild go to the old index and the new slot, so the old index stays current
+    // and the new slot misses nothing.
+    private async Task<(string Name, bool Cleanup)[]> TargetsAsync(string name, IndexDefinition definition, bool rebuildWrite)
+    {
+        var slots = serviceProvider.GetRequiredService<IndexSlots>();
+        if (rebuildWrite && slots.NewSlot(name, definition) is { } newSlot)
+            return [(newSlot, false)];
+
+        return (await slots.WriteTargetsAsync(name, definition)).Select(target => (target, true)).ToArray();
     }
 
     // Deletes every document of the content from indexes that got nothing to write.
-    private async Task DeleteRemovedVariationsAsync(string indexAlias, IndexDefinition definition, Guid id, IEnumerable<PhysicalIndex> physicalIndexes)
+    private async Task DeleteRemovedVariationsAsync(
+        string indexAlias, IndexDefinition definition, Guid id, IEnumerable<PhysicalIndex> physicalIndexes, bool rebuildWrite)
     {
         foreach (var physicalIndex in physicalIndexes)
         {
-            // Zero-downtime rebuild: the deletes go to the old and the new index, as the writes do.
-            foreach (var target in await serviceProvider.GetRequiredService<IndexSlots>().WriteTargetsAsync(physicalIndex.Name, definition))
+            // Zero-downtime rebuild: the deletes go where the writes go.
+            foreach (var (target, cleanup) in await TargetsAsync(physicalIndex.Name, definition, rebuildWrite))
             {
+                if (!cleanup)
+                    continue;
+
                 try
                 {
                     var searchClient = azureSearchClientFactory.GetSearchIndexClient().GetSearchClient(target);
@@ -118,12 +136,12 @@ public class AzureSearchIndexer(
         UmbracoObjectTypes objectType,
         Variation[] variations,
         IReadOnlyCollection<IndexField> fields,
-        ContentProtection? protection)
+        ContentProtection? protection,
+        bool rebuildWrite)
     {
-        // Zero-downtime rebuild: during a rebuild the old and the new index both get the write.
-        foreach (var target in await serviceProvider.GetRequiredService<IndexSlots>().WriteTargetsAsync(physicalIndex.Name, definition))
+        foreach (var (target, cleanup) in await TargetsAsync(physicalIndex.Name, definition, rebuildWrite))
         {
-            await WriteToIndexAsync(indexAlias, physicalIndex with { Name = target }, definition, id, objectType, variations, fields, protection);
+            await WriteToIndexAsync(indexAlias, physicalIndex with { Name = target }, definition, id, objectType, variations, fields, protection, cleanup);
         }
     }
 
@@ -135,7 +153,8 @@ public class AzureSearchIndexer(
         UmbracoObjectTypes objectType,
         Variation[] variations,
         IReadOnlyCollection<IndexField> fields,
-        ContentProtection? protection)
+        ContentProtection? protection,
+        bool cleanup)
     {
         var searchClient = azureSearchClientFactory.GetSearchIndexClient().GetSearchClient(physicalIndex.Name);
 
@@ -174,6 +193,9 @@ public class AzureSearchIndexer(
         else
         {
             logger.LogDebug("Successfully indexed {DocumentCount} document(s) for {Id} into {IndexAlias}", mappingResult.Documents.Count, id, indexAlias);
+            if (!cleanup)
+                return;
+
             try
             {
                 await DeleteRemovedVariationsAsync(searchClient, indexAlias, id, mappingResult.Documents);
@@ -367,9 +389,10 @@ public class AzureSearchIndexer(
 
         var definition = new IndexDefinition(azureSearchIndexOptions.Get(indexAlias));
         var idList = ids.ToArray();
+        var rebuildWrite = serviceProvider.GetRequiredService<RebuildWrites>().Current(indexAlias) is not null;
         foreach (var physicalIndex in await serviceProvider.GetRequiredService<PhysicalIndexes>().AllAsync(indexAlias, definition))
         {
-            foreach (var target in await serviceProvider.GetRequiredService<IndexSlots>().WriteTargetsAsync(physicalIndex.Name, definition))
+            foreach (var (target, _) in await TargetsAsync(physicalIndex.Name, definition, rebuildWrite))
             {
                 try
                 {
@@ -428,9 +451,15 @@ public class AzureSearchIndexer(
         }
     }
 
-    public async Task ResetAsync(string indexAlias)
+    // Not async: Umbraco Search calls ResetAsync at the start of a rebuild and writes the items in the same async flow.
+    // The rebuild flow set here, outside an async method, stays in the flow of the caller (see RebuildWrites).
+    public Task ResetAsync(string indexAlias)
     {
-        await azureSearchIndexManager.ResetAsync(indexAlias);
+        if (ShouldNotManipulateIndexes())
+            return Task.CompletedTask;
+
+        serviceProvider.GetRequiredService<RebuildWrites>().Begin(indexAlias);
+        return azureSearchIndexManager.ResetAsync(indexAlias);
     }
 
     public async Task<IndexMetadata> GetMetadataAsync(string indexAlias)

@@ -220,6 +220,6 @@ public class AzureSearchSchemaUpdateTests
         Assert.That(azure.Count(azure.SchemaUpdates, IndexAlias), Is.EqualTo(1));
     }
 
-    // A rebuild as Umbraco Search runs it: the reset, then the writes, in one async flow.
+    // Starts a rebuild in its own async flow, so the writes of the test are writes during the rebuild, such as a publish.
     private static async Task RebuildAsync(IIndexer indexer, string indexAlias) => await indexer.ResetAsync(indexAlias);
 }
