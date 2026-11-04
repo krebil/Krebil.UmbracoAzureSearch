@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 using Azure;
 using Azure.Search.Documents;
@@ -609,7 +610,7 @@ public class AzureSearchSearcher(
     {
         var text = query?.Trim();
         return string.IsNullOrEmpty(text) ? "*"
-            : text.All(char.IsLetterOrDigit) ? $"{text}*"
+            : text.EnumerateRunes().All(Rune.IsLetterOrDigit) ? $"{text}*"
             : text;
     }
 
