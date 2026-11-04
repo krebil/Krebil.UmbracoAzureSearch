@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 using Azure;
 using Azure.Search.Documents;
@@ -309,18 +310,15 @@ public class AzureSearchSearcher(
         };
 
         // Only a search without any criteria finds nothing, as in the Examine provider; otherwise no query matches all.
-        // For single-word queries, append * for prefix matching
         if (query is null && filters is null && facets is null && sorters is null
             && culture is null && segment is null && accessContext is null)
         {
             return new SearchResult(0, [], []);
         }
-        var searchText = string.IsNullOrWhiteSpace(query)
-            ? "*"
-            : query.Contains(' ') ? query : $"{query}*";
+        var searchText = SearchText(query);
 
         // Spell check: the lexicon speller corrects the query terms of a mapped culture. Azure does not correct prefix
-        // (one-word, "*") queries, and returns no corrected text.
+        // ("boat*") queries, and returns no corrected text.
         if (definition.QueryLanguage(culture) is { } queryLanguage
             && !serviceProvider.GetRequiredService<SpellerState>().IsRejected(physicalIndex.Name))
         {
@@ -602,6 +600,18 @@ public class AzureSearchSearcher(
             .Take(maxSuggestions)
             .ToArray();
         return suggestions.Length > 0 ? suggestions : null;
+    }
+
+    // A one-word query of letters and digits gets a "*" suffix for prefix matching. Azure sends a prefix term to the
+    // index without analysis, so a word with punctuation ("2026-11-03", "e-mail") goes as typed: the analyzer then
+    // splits it as it split the indexed text, where no token starts with the hyphenated form. A query that already
+    // ends with "*" keeps its wildcard, and a query of two or more words goes as typed, as before.
+    private static string SearchText(string? query)
+    {
+        var text = query?.Trim();
+        return string.IsNullOrEmpty(text) ? "*"
+            : text.EnumerateRunes().All(Rune.IsLetterOrDigit) ? $"{text}*"
+            : text;
     }
 
     // Empty (every searchable field, as before) outside FieldPerCulture. In FieldPerCulture, a mapped culture searches
