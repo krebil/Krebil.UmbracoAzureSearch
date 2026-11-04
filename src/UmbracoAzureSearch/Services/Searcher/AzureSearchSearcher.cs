@@ -317,7 +317,7 @@ public class AzureSearchSearcher(
         var searchText = SearchText(query);
 
         // Spell check: the lexicon speller corrects the query terms of a mapped culture. Azure does not correct prefix
-        // ("*") queries, and returns no corrected text.
+        // ("boat*") queries, and returns no corrected text.
         if (definition.QueryLanguage(culture) is { } queryLanguage
             && !serviceProvider.GetRequiredService<SpellerState>().IsRejected(physicalIndex.Name))
         {
@@ -601,17 +601,20 @@ public class AzureSearchSearcher(
         return suggestions.Length > 0 ? suggestions : null;
     }
 
-    // Empty (every searchable field, as before) outside FieldPerCulture. In FieldPerCulture, a mapped culture searches
-    // its copies plus the invariant copies, and any other request searches the shared aggregate text fields.
     // A one-word query of letters and digits gets a "*" suffix for prefix matching. Azure sends a prefix term to the
     // index without analysis, so a word with punctuation ("2026-11-03", "e-mail") goes as typed: the analyzer then
     // splits it as it split the indexed text, where no token starts with the hyphenated form. A query that already
-    // ends with "*", or has two or more words, also goes as typed.
-    internal static string SearchText(string? query)
-        => string.IsNullOrWhiteSpace(query) ? "*"
-            : query.All(char.IsLetterOrDigit) ? $"{query}*"
-            : query;
+    // ends with "*" keeps its wildcard, and a query of two or more words goes as typed, as before.
+    private static string SearchText(string? query)
+    {
+        var text = query?.Trim();
+        return string.IsNullOrEmpty(text) ? "*"
+            : text.All(char.IsLetterOrDigit) ? $"{text}*"
+            : text;
+    }
 
+    // Empty (every searchable field, as before) outside FieldPerCulture. In FieldPerCulture, a mapped culture searches
+    // its copies plus the invariant copies, and any other request searches the shared aggregate text fields.
     private static string[] SearchFields(IndexDefinition definition, string? culture)
     {
         if (!definition.FieldPerCulture)

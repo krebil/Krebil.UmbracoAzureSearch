@@ -82,4 +82,4 @@ Add the culture to `SpellCheck:Cultures` and restart the application. No rebuild
 
 - Spell check is an Azure preview feature. Microsoft can change it. The package uses API version `2026-05-01-preview`.
 - A `queryLanguage` that does not match the content gives wrong corrections. Map each culture to its own language, and use language analyzers of the same language. See [Analyzers](analyzers.md).
-- The package adds `*` to a one-word query of letters and digits for prefix matching (`boat` is sent as `boat*`). Azure does not correct prefix, wildcard, fuzzy or regex terms, so such a query is not corrected. Queries with two or more words, and a word with punctuation such as `e-mail`, are sent as typed and are corrected.
+- The package adds `*` to a one-word query of letters and digits for prefix matching (`boat` is sent as `boat*`). Azure does not correct prefix, wildcard, fuzzy or regex terms, so such a query is not corrected. A query of two or more words, or a word with punctuation such as `e-mail`, is sent as typed and is corrected.
