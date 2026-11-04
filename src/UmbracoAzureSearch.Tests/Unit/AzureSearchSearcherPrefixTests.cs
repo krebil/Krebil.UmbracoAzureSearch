@@ -13,7 +13,7 @@ public class AzureSearchSearcherPrefixTests
     [TestCase("e-mail", "e-mail", "Same for a hyphenated word.")]
     [TestCase("boat trip", "boat trip", "Two or more words go as typed.")]
     [TestCase("\"boat trip\"", "\"boat trip\"", "Simple query syntax goes as typed.")]
-    [TestCase("   ", "*", "A blank query finds all when other criteria are present.")]
+    [TestCase("boat ", "boat*", "Whitespace around the word is trimmed first.")]
     public async Task AddsThePrefixSuffixOnlyToAPlainWord(string query, string searchText, string because)
     {
         var service = new FakeSearchService();
